@@ -1,0 +1,275 @@
+// Creator Partnership OS — data model
+//
+// Provider is SQLite for now; every field is chosen so the same schema moves to
+// Postgres/Supabase later with only the datasource block changing. Notes:
+//   - Prisma does not support enums on SQLite, so status/kind fields are String.
+//     The allowed values live in src/lib/constants.ts and are validated with zod
+//     at the module boundary — keep the two in sync.
+//   - Money is stored in integer cents, never floats.
+//   - Anything shaped by an LLM lands in a Json column plus an artifact path on
+//     disk under outputs/<creator-handle>/.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Where a creator came from: a hashtag, a YouTube search, a niche list, a
+/// competitor's audience, a manual add. Finder runs read Sources and write
+/// Creators back against them.
+model Source {
+  id        String  @id @default(cuid())
+  kind      String // SourceKind: HASHTAG | YT_SEARCH | IG_SEARCH | SIMILAR_TO | NEWSLETTER | MANUAL | CSV_IMPORT
+  platform  String // Platform: INSTAGRAM | YOUTUBE | BOTH
+  query     String // the hashtag, search string, seed handle or file path
+  niche     String?
+  notes     String?
+  active    Boolean @default(true)
+
+  // run bookkeeping so the finder can be re-run without duplicating work
+  lastRunAt     DateTime?
+  runCount      Int       @default(0)
+  foundCount    Int       @default(0)
+  qualifiedCount Int      @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  creators  Creator[]
+
+  @@unique([platform, kind, query])
+  @@index([active, lastRunAt])
+}
+
+/// A micro-creator prospect. `handle` is the canonical key used for the
+/// outputs/<creator-handle>/ artifact directory.
+model Creator {
+  id          String  @id @default(cuid())
+  handle      String  @unique // normalised, lowercase, no leading @
+  platform    String // Platform: INSTAGRAM | YOUTUBE | BOTH
+  displayName String?
+  profileUrl  String?
+  altProfiles Json? // { instagram, youtube, tiktok, x, website, linktree }
+
+  // positioning
+  niche       String?
+  subNiche    String?
+  bio         String?
+  language    String?
+  country     String?
+
+  // audience metrics (snapshot at last refresh)
+  followers      Int?
+  followingCount Int?
+  postCount      Int?
+  avgViews       Int?
+  avgLikes       Int?
+  avgComments    Int?
+  engagementRate Float? // 0-1, not a percentage
+  postsPerWeek   Float?
+  metricsAt      DateTime?
+
+  // qualification: the whole thesis is "engaged niche audience, no product yet"
+  hasDigitalProduct Boolean @default(false)
+  productEvidence   Json? // urls / quotes that prove they do or don't sell something
+  monetization      Json? // { sponsorships, affiliate, merch, coaching, patreon }
+
+  // contact
+  contactEmail  String?
+  contactMethod String? // ContactMethod: EMAIL | IG_DM | YT_ABOUT | WEBSITE_FORM | MANAGER
+  contactNotes  String?
+
+  // scoring (scorer module)
+  score          Int? // 0-100
+  scoreBreakdown Json? // { reach, engagement, nicheClarity, productGap, monetisability, reachability }
+  scoredAt       DateTime?
+  scoreModel     String?
+
+  // voice + visual identity (brand module) — drives the product's look and tone
+  brandProfile Json?
+  brandAt      DateTime?
+
+  // pipeline
+  status          String  @default("DISCOVERED") // CreatorStatus: DISCOVERED | SCORED | AUDITED | CONTACTED | REPLIED | AGREED | LAUNCHED | DECLINED | DISQUALIFIED
+  disqualifiedFor String?
+  outputDir       String? // outputs/<handle>
+  raw             Json? // untouched payload from the discovery source
+
+  sourceId String?
+  source   Source? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  audits   Audit[]
+  products Product[]
+  messages OutreachMessage[]
+  launches Launch[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, score])
+  @@index([platform, followers])
+  @@index([niche])
+}
+
+/// A research-backed read of one creator: what they talk about, who listens,
+/// what those people are stuck on, and what product would sell to them.
+model Audit {
+  id        String  @id @default(cuid())
+  creatorId String
+  creator   Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  summary          String
+  contentPillars   Json? // [{ pillar, share, examplePostUrls }]
+  audienceProfile  Json? // { demographics, sophistication, jobsToBeDone }
+  painPoints       Json? // [{ pain, evidence, frequency, severity }]
+  monetizationGaps Json? // [{ gap, why, existingAlternatives }]
+  productAngles    Json? // [{ title, promise, whyThisCreator, confidence }]
+  toneNotes        String?
+  risks            String?
+
+  opportunityScore Int? // 0-100, the audit's own verdict on product-fit
+  confidence       Float? // 0-1, how much evidence backed the read
+
+  sampleSize   Int? // posts/videos actually analysed
+  evidence     Json? // urls, comment quotes, transcript excerpts
+  raw          Json? // full validated LLM response
+  artifactPath String? // outputs/<handle>/audit/audit.md
+
+  model      String?
+  tokensIn   Int?
+  tokensOut  Int?
+  costCents  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([creatorId, createdAt])
+}
+
+/// The 35-50 page PDF built in the creator's voice, plus everything that went
+/// into it (outline, research, brand pass, rendered files).
+model Product {
+  id        String  @id @default(cuid())
+  creatorId String
+  creator   Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  title    String
+  subtitle String?
+  promise  String? // the point-A-to-point-B transformation
+  audience String?
+
+  outline    Json? // [{ chapter, goal, sections[], targetWords }]
+  research   Json? // [{ claim, source, url, retrievedAt }]
+  chapters   Json? // rendered chapter bodies, keyed by slug
+  brandTheme Json? // resolved fonts, palette, cover direction used for this build
+
+  pageCount Int?
+  wordCount Int?
+
+  // pricing for the funnel this product anchors
+  priceCents       Int?
+  bumpPriceCents   Int?
+  upsellPriceCents Int?
+
+  // funnel copy (funnel module) — sales page, order bump, upsell
+  funnel Json?
+
+  // artifacts on disk
+  htmlPath     String? // outputs/<handle>/product/product.html
+  pdfPath      String? // outputs/<handle>/product/<slug>.pdf
+  coverPath    String?
+  researchPath String?
+  funnelPath   String?
+
+  status String @default("DRAFT") // ProductStatus: DRAFT | RESEARCHING | OUTLINED | WRITING | BRANDED | RENDERED | APPROVED | PUBLISHED | ARCHIVED
+
+  model     String?
+  tokensIn  Int?
+  tokensOut Int?
+  costCents Int?
+
+  launches Launch[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([creatorId, status])
+}
+
+/// Every message we send a creator, including follow-ups, and what came back.
+model OutreachMessage {
+  id        String  @id @default(cuid())
+  creatorId String
+  creator   Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  channel  String // OutreachChannel: EMAIL | IG_DM | YT_ABOUT | X_DM | MANUAL
+  sequence Int     @default(1) // 1 = first touch, 2+ = follow-ups
+  variant  String? // A/B label
+  subject  String?
+  body     String
+  hooks    Json? // the personalisation the message leans on, for later analysis
+
+  status     String    @default("DRAFT") // OutreachStatus: DRAFT | APPROVED | SENT | REPLIED | BOUNCED | IGNORED | DECLINED
+  sentAt     DateTime?
+  repliedAt  DateTime?
+  replyBody  String?
+  sentiment  String? // POSITIVE | NEUTRAL | NEGATIVE
+  externalId String? // provider message id, once we wire a sender
+
+  artifactPath String? // outputs/<handle>/outreach/<sequence>-<channel>.md
+  model        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([creatorId, sequence])
+  @@index([status, sentAt])
+}
+
+/// A published funnel and its results. One per product per platform.
+model Launch {
+  id        String   @id @default(cuid())
+  creatorId String
+  creator   Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  platform          String  @default("WHOP") // LaunchPlatform: WHOP | GUMROAD | STRIPE | MANUAL
+  externalProductId String?
+  externalPlanId    String?
+  url               String?
+  checkoutUrl       String?
+
+  priceCents       Int?
+  bumpPriceCents   Int?
+  upsellPriceCents Int?
+  revShareCreatorPct Int? // 0-100, the creator's cut
+
+  status     String    @default("PENDING") // LaunchStatus: PENDING | LIVE | PAUSED | ENDED | FAILED
+  launchedAt DateTime?
+  endedAt    DateTime?
+
+  // results, refreshed by the publisher module
+  visits       Int @default(0)
+  checkouts    Int @default(0)
+  sales        Int @default(0)
+  bumpSales    Int @default(0)
+  upsellSales  Int @default(0)
+  revenueCents Int @default(0)
+  refundCents  Int @default(0)
+  statsAt      DateTime?
+
+  notes String?
+  raw   Json? // last provider payload
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, launchedAt])
+  @@index([creatorId])
+}
