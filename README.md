@@ -78,6 +78,10 @@ the `=`, with no quotes and no spaces (`ANTHROPIC_API_KEY=sk-ant-...`).
 Never paste a key into a hosted web page, a chat, or a shell command — a shell
 command lands in your history in plaintext.
 
+Cloud sessions run `.claude/hooks/session-start.sh` on startup, which installs
+dependencies, applies the Prisma schema and points Playwright at the Chromium
+already in the image — so a fresh session is ready without any manual setup.
+
 Running in a Claude Code cloud session instead of locally? Set the variables on
 the environment (claude.ai/code → the cloud icon above the message box → hover
 your environment → settings icon → **Environment variables**, in `.env` format).
@@ -102,18 +106,24 @@ any of them.
 
 ```bash
 # 1. discover candidates (10k-200k followers, engaged, no product yet)
-npm run finder -- --platform instagram --niche "home barista" --limit 50
-npm run finder -- --platform youtube --query "notion templates" --min-engagement 0.03
-npm run finder -- --source src_abc123 --limit 25
+npm run finder -- --platform ig  --queries "credit repair tips,credit score tips" --limit 60
+npm run finder -- --platform yt  --queries "notion templates" --minFollowers 20000
+npm run finder -- --platform csv --csv ./handles.csv --csvPlatform ig
 
 # 2. score product-fit and reachability, 0-100
-npm run scorer -- --handle jamesclearcoffee
-npm run scorer -- --all --limit 50
-npm run scorer -- --all --rescore
+npm run scorer -- --all
+npm run scorer -- --handle thecreditrepairshop
+npm run scorer -- --all --limit 50 --rescore
+npm run scorer -- --all --offline        # metrics only, no API key needed
 
-# 3. audit the audience: pillars, pains, monetisation gaps, product angles
-npm run audit -- --handle jamesclearcoffee
-npm run audit -- --handle jamesclearcoffee --posts 40 --refresh
+# 2b. the handover artifact: ranked creators + outputs/shortlist.csv
+npm run shortlist -- --top 15
+npm run shortlist -- --top 25 --verdict GO --no-product
+
+# 3. audit the audience: pains, voice, visual style, product angles
+npm run audit -- --handle https://www.youtube.com/channel/UC...   # YouTube: channel-id URL
+npm run audit -- --handle creditqueen --posts 60 --topPosts 15    # Instagram: handle
+npm run audit -- --handle creditqueen --collect-only              # evidence only, no model calls
 
 # 4. capture the creator's voice, palette and typography
 npm run brand -- --handle jamesclearcoffee
@@ -151,6 +161,7 @@ npm run db:migrate     # create a named migration (use before the Supabase move)
 npm run db:studio      # browse the data at localhost:5555
 
 npm run typecheck      # tsc --noEmit
+npm run test           # node --test, no network: every API call is mocked
 npm run build          # next build
 npm run dev            # next dev — placeholder UI for now
 ```
@@ -167,6 +178,8 @@ src/
     db.ts          Prisma client singleton
     paths.ts       outputs/<creator-handle>/ artifact helpers
     cli.ts         flag parsing, --help, env checks, exit codes
+    http.ts        outbound HTTP: rate limiting, retries, timeouts
+    table.ts       CLI tables and CSV output
     constants.ts   status values + qualification thresholds
     logger.ts      levelled, scoped logging
   modules/
@@ -176,6 +189,9 @@ src/
       README.md    what this module owns
   scripts/
     doctor.ts      the environment check
+    shortlist.ts   ranked creators -> outputs/shortlist.csv
+data/
+  niche-cpc.json   CPC hints that anchor the scorer's spending-power component
   app/             Next.js shell (UI comes after the CLIs work)
 prisma/
   schema.prisma    Creator, Audit, Product, OutreachMessage, Launch, Source
@@ -213,6 +229,7 @@ Set `LLM_TRACE=true` to write every prompt and response to `outputs/_llm/`.
 
 | Model | What it holds |
 | --- | --- |
+| `Creator.score` | The weighted 0-100 score; `scoreJson` holds the full scorer read (reasons, red flags, product type, price band, verdict). |
 | `Source` | Where creators come from — hashtag, search, lookalike, CSV. Tracks run counts so discovery is repeatable. |
 | `Creator` | The prospect: metrics, niche, contact route, score + breakdown, brand profile, pipeline status. |
 | `Audit` | The research read: pillars, audience, pain points, monetisation gaps, product angles, evidence. |
