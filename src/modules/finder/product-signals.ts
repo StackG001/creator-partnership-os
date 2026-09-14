@@ -15,8 +15,8 @@ export interface ProductSignal {
   kind: 'platform' | 'keyword';
   /** The pattern that matched, e.g. "gumroad.com". */
   match: string;
-  /** Where we saw it: 'bio' or 'link'. */
-  where: 'bio' | 'link';
+  /** Where we saw it. */
+  where: 'bio' | 'link' | 'caption';
   /** The surrounding text or full URL, so a human can check the call. */
   evidence: string;
 }
@@ -36,11 +36,20 @@ function excerpt(text: string, index: number, length: number): string {
 }
 
 export function detectDigitalProduct(
-  profile: Pick<DiscoveredProfile, 'bio' | 'externalLinks'>,
+  profile: Pick<DiscoveredProfile, 'bio' | 'externalLinks'> & {
+    /**
+     * Post captions / video descriptions. Creators routinely sell from these
+     * and never mention it in the bio, so a bio-only check reports a clean
+     * prospect for someone running a full storefront.
+     */
+    captions?: string[];
+  },
 ): ProductDetection {
   const signals: ProductSignal[] = [];
   const bio = profile.bio ?? '';
   const haystack = bio.toLowerCase();
+  const captions = (profile.captions ?? []).join('\n');
+  const captionHaystack = captions.toLowerCase();
 
   // A storefront domain anywhere in the bio text or the linked URLs.
   for (const platform of PRODUCT_SIGNALS.platforms) {
@@ -59,6 +68,19 @@ export function detectDigitalProduct(
         match: platform,
         where: 'bio',
         evidence: excerpt(bio, index, needle.length),
+      });
+    }
+
+    // Captions contribute storefront URLs only. Running the keyword list over
+    // a hundred captions would flag every creator who ever said "guide", but a
+    // checkout link in a description is as conclusive as one in the bio.
+    const captionIndex = captionHaystack.indexOf(needle);
+    if (captionIndex !== -1) {
+      signals.push({
+        kind: 'platform',
+        match: platform,
+        where: 'caption',
+        evidence: excerpt(captions, captionIndex, needle.length),
       });
     }
   }

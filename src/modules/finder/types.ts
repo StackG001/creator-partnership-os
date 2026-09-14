@@ -6,6 +6,15 @@ import type { Platform } from '../../lib/constants.js';
  * written once and know nothing about where a creator came from.
  */
 
+export interface CommentMetric {
+  id: string;
+  text: string;
+  likes?: number;
+  publishedAt?: string;
+  /** True when the creator wrote it — evidence they reply to their audience. */
+  byCreator?: boolean;
+}
+
 export interface PostMetric {
   id: string;
   url?: string;
@@ -14,6 +23,12 @@ export interface PostMetric {
   views?: number;
   likes?: number;
   comments?: number;
+  /** Thumbnail or post image, used for palette extraction. */
+  imageUrl?: string;
+  /** Best-effort: the platforms expose this inconsistently. */
+  pinned?: boolean;
+  /** Populated only by the audit's deeper fetch, not by discovery. */
+  commentSample?: CommentMetric[];
 }
 
 export interface DiscoveredProfile {
@@ -37,8 +52,11 @@ export interface DiscoveredProfile {
   raw: unknown;
 }
 
-/** How many recent posts each backend pulls — the brief asks for 12. */
+/** Posts pulled during discovery — enough to judge engagement cheaply. */
 export const POSTS_SAMPLED = 12;
+
+/** Posts pulled for an audit, where the brief asks for 50-100. */
+export const AUDIT_POSTS_SAMPLED = 100;
 
 export interface ProfileMetrics {
   avgViews?: number;

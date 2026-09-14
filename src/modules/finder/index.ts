@@ -333,7 +333,12 @@ export async function findCreators(options: FinderOptions): Promise<FinderResult
 
   for (const { profile, sourceId } of discovered) {
     const metrics = computeMetrics(profile);
-    const detection = detectDigitalProduct(profile);
+    const detection = detectDigitalProduct({
+      ...profile,
+      captions: profile.posts
+        .map((post) => post.caption)
+        .filter((caption): caption is string => Boolean(caption)),
+    });
     const { qualified, reason } = qualify(profile, metrics, options);
 
     const candidate: FinderCandidate = {

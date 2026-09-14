@@ -120,9 +120,10 @@ npm run scorer -- --all --offline        # metrics only, no API key needed
 npm run shortlist -- --top 15
 npm run shortlist -- --top 25 --verdict GO --no-product
 
-# 3. audit the audience: pillars, pains, monetisation gaps, product angles
-npm run audit -- --handle jamesclearcoffee
-npm run audit -- --handle jamesclearcoffee --posts 40 --refresh
+# 3. audit the audience: pains, voice, visual style, product angles
+npm run audit -- --handle https://www.youtube.com/channel/UC...   # YouTube: channel-id URL
+npm run audit -- --handle creditqueen --posts 60 --topPosts 15    # Instagram: handle
+npm run audit -- --handle creditqueen --collect-only              # evidence only, no model calls
 
 # 4. capture the creator's voice, palette and typography
 npm run brand -- --handle jamesclearcoffee

@@ -1,7 +1,7 @@
 import { RateLimiter, query, requestJson, type FetchImpl } from '../../lib/http.js';
 import { normalizeHandle } from '../../lib/paths.js';
 import { extractEmail, extractLinks } from './product-signals.js';
-import { POSTS_SAMPLED, type DiscoveredProfile, type PostMetric } from './types.js';
+import { POSTS_SAMPLED, type CommentMetric, type DiscoveredProfile, type PostMetric } from './types.js';
 
 /**
  * Instagram backend, via an Apify actor — there is no official API that returns
@@ -59,6 +59,10 @@ interface ApifyPost {
   commentsCount?: number;
   videoViewCount?: number;
   videoPlayCount?: number;
+  displayUrl?: string;
+  imageUrl?: string;
+  isPinned?: boolean;
+  latestComments?: Array<{ id?: string; text?: string; ownerUsername?: string; likesCount?: number; timestamp?: string }>;
 }
 
 function num(value: unknown): number | undefined {
@@ -74,8 +78,25 @@ export function toHashtag(phrase: string): string {
     .replace(/[^a-z0-9]+/g, '');
 }
 
-function toPostMetric(post: ApifyPost): PostMetric {
+function toPostMetric(post: ApifyPost, ownerUsername?: string): PostMetric {
   const shortCode = post.shortCode ?? post.id ?? '';
+
+  // The actor embeds top comments on each post when it has them; that saves a
+  // second run for the audit's comment sample.
+  const commentSample = (post.latestComments ?? [])
+    .map((comment) =>
+      comment?.text
+        ? ({
+            id: comment.id ?? '',
+            text: comment.text,
+            likes: num(comment.likesCount),
+            publishedAt: comment.timestamp,
+            byCreator: Boolean(ownerUsername && comment.ownerUsername === ownerUsername),
+          } as CommentMetric)
+        : undefined,
+    )
+    .filter((comment): comment is CommentMetric => Boolean(comment));
+
   return {
     id: shortCode,
     url: post.url ?? (shortCode ? `https://www.instagram.com/p/${shortCode}/` : undefined),
@@ -85,6 +106,9 @@ function toPostMetric(post: ApifyPost): PostMetric {
     views: num(post.videoPlayCount) ?? num(post.videoViewCount),
     likes: num(post.likesCount),
     comments: num(post.commentsCount),
+    imageUrl: post.displayUrl ?? post.imageUrl,
+    pinned: post.isPinned === true,
+    ...(commentSample.length ? { commentSample } : {}),
   } as PostMetric;
 }
 
@@ -160,15 +184,18 @@ export class InstagramClient {
     return handles;
   }
 
-  /** Full profiles, with the last 12 posts, for a set of handles. */
-  async fetchProfiles(handles: string[]): Promise<DiscoveredProfile[]> {
+  /**
+   * Full profiles for a set of handles.
+   * `postLimit` is 12 for discovery and up to 100 for an audit.
+   */
+  async fetchProfiles(handles: string[], postLimit = POSTS_SAMPLED): Promise<DiscoveredProfile[]> {
     if (!handles.length) return [];
 
     const items = await this.run(
       {
         directUrls: handles.map((h) => `https://www.instagram.com/${h}/`),
         resultsType: 'details',
-        resultsLimit: POSTS_SAMPLED,
+        resultsLimit: postLimit,
         addParentData: false,
       },
       `profiles:${handles.length}`,
@@ -188,7 +215,9 @@ export class InstagramClient {
         ),
       ].filter((url): url is string => Boolean(url));
 
-      const posts = (item.latestPosts ?? []).slice(0, POSTS_SAMPLED).map(toPostMetric);
+      const posts = (item.latestPosts ?? [])
+        .slice(0, postLimit)
+        .map((post) => toPostMetric(post, item.username));
 
       let handle: string;
       try {
@@ -223,5 +252,43 @@ export class InstagramClient {
     }
 
     return profiles;
+  }
+
+  /**
+   * Comments on specific posts, for the audit's deeper read. Used only when the
+   * profile pass did not already embed them.
+   */
+  async fetchComments(postUrls: string[], perPost = 20): Promise<Map<string, CommentMetric[]>> {
+    const byPost = new Map<string, CommentMetric[]>();
+    if (!postUrls.length) return byPost;
+
+    const items = await this.run(
+      {
+        directUrls: postUrls,
+        resultsType: 'comments',
+        resultsLimit: perPost,
+        addParentData: true,
+      },
+      `comments:${postUrls.length}`,
+    );
+
+    for (const item of items as Array<Record<string, unknown>>) {
+      const text = item.text as string | undefined;
+      if (!text) continue;
+      // The actor tags each comment with the post it belongs to.
+      const postUrl = (item.postUrl ?? item.parentUrl ?? item.url) as string | undefined;
+      const key = postUrl ?? 'unknown';
+      const list = byPost.get(key) ?? [];
+      list.push({
+        id: (item.id as string) ?? '',
+        text,
+        likes: num(item.likesCount as number),
+        publishedAt: item.timestamp as string | undefined,
+        byCreator: false,
+      });
+      byPost.set(key, list);
+    }
+
+    return byPost;
   }
 }

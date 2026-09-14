@@ -124,6 +124,16 @@ export const PRODUCT_SIGNALS = {
     'beacons.ai/store',
     'shopify.com',
     'etsy.com',
+    'samcart.com',
+    'thrivecart.com',
+    'kartra.com',
+    'clickfunnels.com',
+    'systeme.io',
+    'learnworlds.com',
+    'sellfy.com',
+    'hotmart.com',
+    'buy.stripe.com',
+    'checkout.stripe.com',
   ],
   /** Words in a bio that advertise a product. Weaker — needs the link check. */
   keywords: [

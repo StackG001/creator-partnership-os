@@ -1,7 +1,7 @@
-import { RateLimiter, query, requestJson, type FetchImpl } from '../../lib/http.js';
+import { HttpError, RateLimiter, query, requestJson, type FetchImpl } from '../../lib/http.js';
 import { normalizeHandle } from '../../lib/paths.js';
 import { extractEmail, extractLinks } from './product-signals.js';
-import { POSTS_SAMPLED, type DiscoveredProfile, type PostMetric } from './types.js';
+import { POSTS_SAMPLED, type CommentMetric, type DiscoveredProfile, type PostMetric } from './types.js';
 
 /**
  * YouTube Data API v3 backend.
@@ -47,14 +47,46 @@ interface ChannelResource {
 
 interface PlaylistItemsResponse {
   items?: Array<{ contentDetails?: { videoId?: string; videoPublishedAt?: string } }>;
+  nextPageToken?: string;
 }
 
 interface VideosResponse {
   items?: Array<{
     id?: string;
-    snippet?: { title?: string; publishedAt?: string };
+    snippet?: {
+      title?: string;
+      description?: string;
+      publishedAt?: string;
+      thumbnails?: Record<string, { url?: string; width?: number }>;
+    };
     statistics?: { viewCount?: string; likeCount?: string; commentCount?: string };
   }>;
+}
+
+interface CommentThreadsResponse {
+  items?: Array<{
+    snippet?: {
+      topLevelComment?: {
+        id?: string;
+        snippet?: {
+          textOriginal?: string;
+          textDisplay?: string;
+          likeCount?: number;
+          publishedAt?: string;
+          authorChannelId?: { value?: string };
+        };
+      };
+    };
+  }>;
+}
+
+/** Largest thumbnail available — more pixels means a truer palette. */
+function bestThumbnail(thumbnails?: Record<string, { url?: string; width?: number }>): string | undefined {
+  if (!thumbnails) return undefined;
+  const sorted = Object.values(thumbnails)
+    .filter((t): t is { url: string; width?: number } => Boolean(t?.url))
+    .sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
+  return sorted[0]?.url;
 }
 
 /** API returns counts as strings; missing/hidden ones must stay undefined. */
@@ -115,8 +147,11 @@ export class YouTubeClient {
     return [...new Set(ids)].slice(0, limit);
   }
 
-  /** Hydrate channels, then attach their most recent videos. 50 per batch. */
-  async fetchProfiles(channelIds: string[]): Promise<DiscoveredProfile[]> {
+  /**
+   * Hydrate channels, then attach their most recent videos. 50 per batch.
+   * `postLimit` is 12 for discovery and up to 100 for an audit.
+   */
+  async fetchProfiles(channelIds: string[], postLimit = POSTS_SAMPLED): Promise<DiscoveredProfile[]> {
     const profiles: DiscoveredProfile[] = [];
 
     for (const batch of chunk(channelIds, 50)) {
@@ -136,7 +171,7 @@ export class YouTubeClient {
     for (const profile of profiles) {
       const uploads = (profile.raw as ChannelResource)?.contentDetails?.relatedPlaylists?.uploads;
       if (!uploads) continue;
-      profile.posts = await this.fetchRecentVideos(uploads);
+      profile.posts = await this.fetchRecentVideos(uploads, postLimit);
     }
 
     return profiles;
@@ -179,33 +214,111 @@ export class YouTubeClient {
     };
   }
 
-  private async fetchRecentVideos(uploadsPlaylistId: string): Promise<PostMetric[]> {
-    const playlist: PlaylistItemsResponse = await this.get('playlistItems', {
-      part: 'contentDetails',
-      playlistId: uploadsPlaylistId,
-      maxResults: POSTS_SAMPLED,
-    });
+  /** Uploads playlist -> video ids, paginating 50 at a time up to `limit`. */
+  private async fetchVideoIds(uploadsPlaylistId: string, limit: number): Promise<string[]> {
+    const ids: string[] = [];
+    let pageToken: string | undefined;
 
-    const videoIds = (playlist.items ?? [])
-      .map((item) => item.contentDetails?.videoId)
-      .filter((id): id is string => Boolean(id))
-      .slice(0, POSTS_SAMPLED);
+    while (ids.length < limit) {
+      const playlist: PlaylistItemsResponse = await this.get('playlistItems', {
+        part: 'contentDetails',
+        playlistId: uploadsPlaylistId,
+        maxResults: Math.min(50, limit - ids.length),
+        ...(pageToken ? { pageToken } : {}),
+      });
 
+      const page = (playlist.items ?? [])
+        .map((item) => item.contentDetails?.videoId)
+        .filter((id): id is string => Boolean(id));
+
+      if (!page.length) break;
+      ids.push(...page);
+
+      pageToken = playlist.nextPageToken;
+      if (!pageToken) break;
+    }
+
+    return ids.slice(0, limit);
+  }
+
+  private async fetchRecentVideos(
+    uploadsPlaylistId: string,
+    limit = POSTS_SAMPLED,
+  ): Promise<PostMetric[]> {
+    const videoIds = await this.fetchVideoIds(uploadsPlaylistId, limit);
     if (!videoIds.length) return [];
 
-    const videos: VideosResponse = await this.get('videos', {
-      part: 'snippet,statistics',
-      id: videoIds.join(','),
-    });
+    const posts: PostMetric[] = [];
+    for (const batch of chunk(videoIds, 50)) {
+      const videos: VideosResponse = await this.get('videos', {
+        part: 'snippet,statistics',
+        id: batch.join(','),
+      });
 
-    return (videos.items ?? []).map((video) => ({
-      id: video.id ?? '',
-      url: video.id ? `https://www.youtube.com/watch?v=${video.id}` : undefined,
-      caption: video.snippet?.title,
-      publishedAt: video.snippet?.publishedAt,
-      views: count(video.statistics?.viewCount),
-      likes: count(video.statistics?.likeCount),
-      comments: count(video.statistics?.commentCount),
-    })) as PostMetric[];
+      for (const video of videos.items ?? []) {
+        posts.push({
+          id: video.id ?? '',
+          url: video.id ? `https://www.youtube.com/watch?v=${video.id}` : undefined,
+          // Title plus description: the description is where a creator puts
+          // their calls to action and links, which the audit needs.
+          caption: [video.snippet?.title, video.snippet?.description?.slice(0, 1200)]
+            .filter(Boolean)
+            .join('\n\n'),
+          publishedAt: video.snippet?.publishedAt,
+          views: count(video.statistics?.viewCount),
+          likes: count(video.statistics?.likeCount),
+          comments: count(video.statistics?.commentCount),
+          imageUrl: bestThumbnail(video.snippet?.thumbnails),
+        } as PostMetric);
+      }
+    }
+
+    return posts;
+  }
+
+  /**
+   * Top comments on one video, ordered by relevance — YouTube's own ranking
+   * surfaces the questions an audience actually asks.
+   *
+   * Comments disabled on a video is normal and must not fail an audit, so a
+   * 403 for that video resolves to an empty list.
+   */
+  async fetchComments(
+    videoId: string,
+    limit = 20,
+    channelId?: string,
+  ): Promise<CommentMetric[]> {
+    let response: CommentThreadsResponse;
+    try {
+      response = await this.get('commentThreads', {
+        part: 'snippet',
+        videoId,
+        maxResults: Math.min(100, limit),
+        order: 'relevance',
+        textFormat: 'plainText',
+      });
+    } catch (error) {
+      if (error instanceof HttpError && (error.status === 403 || error.status === 404)) {
+        return [];
+      }
+      throw error;
+    }
+
+    return (response.items ?? [])
+      .map((thread) => {
+        const comment = thread.snippet?.topLevelComment;
+        const snippet = comment?.snippet;
+        const text = snippet?.textOriginal ?? snippet?.textDisplay;
+        if (!text) return undefined;
+        return {
+          id: comment?.id ?? '',
+          text,
+          likes: snippet?.likeCount,
+          publishedAt: snippet?.publishedAt,
+          byCreator: Boolean(channelId && snippet?.authorChannelId?.value === channelId),
+        } as CommentMetric;
+      })
+      .filter((comment): comment is CommentMetric => Boolean(comment))
+      .slice(0, limit);
   }
 }

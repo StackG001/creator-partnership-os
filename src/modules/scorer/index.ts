@@ -95,9 +95,10 @@ function toScorable(creator: Creator): ScorableCreator & { handle: string } {
     contactEmail: creator.contactEmail,
     captions,
     comments,
-    // A creator who replies is reachable; we only know this when comments were
-    // sampled with reply counts, so absence is not evidence of absence.
-    repliesToComments: null,
+    // Set by the audit, which is the only pass that reads comments. Null until
+    // then — absence of the signal is not evidence the creator ignores people.
+    repliesToComments:
+      (creator.monetization as { repliesToComments?: boolean } | null)?.repliesToComments ?? null,
   };
 }
 
