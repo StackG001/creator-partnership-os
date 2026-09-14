@@ -1,9 +1,17 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import readline from 'node:readline';
 import { Writable } from 'node:stream';
 import { parseFlags, type CliSpec } from '../lib/cli.js';
-import { OPTIONAL_ENV_KEYS, REQUIRED_ENV_KEYS } from '../lib/env.js';
+import { REQUIRED_ENV_KEYS } from '../lib/env.js';
+import {
+  CREDENTIAL_KEYS,
+  ENV_PATH,
+  mask,
+  parseEnv,
+  readEnvFile,
+  upsert,
+  valueWarnings,
+  writeEnvFile,
+} from '../lib/envfile.js';
 
 /**
  * `npm run key` — put a credential into .env without it ever being displayed.
@@ -14,9 +22,7 @@ import { OPTIONAL_ENV_KEYS, REQUIRED_ENV_KEYS } from '../lib/env.js';
  * key went in.
  */
 
-const SETTABLE = [...REQUIRED_ENV_KEYS, ...OPTIONAL_ENV_KEYS].filter(
-  (key) => key !== 'DATABASE_URL',
-);
+const SETTABLE = CREDENTIAL_KEYS;
 
 const spec: CliSpec = {
   name: 'key',
@@ -35,48 +41,6 @@ const spec: CliSpec = {
     list: { type: 'boolean', description: 'Show which keys are set, masked, and exit.' },
   },
 };
-
-const ENV_PATH = path.resolve(process.cwd(), '.env');
-const EXAMPLE_PATH = path.resolve(process.cwd(), '.env.example');
-
-function mask(value: string): string {
-  if (value.length <= 8) return `${'•'.repeat(value.length)} (${value.length} chars)`;
-  return `${value.slice(0, 5)}${'•'.repeat(12)}${value.slice(-4)} (${value.length} chars)`;
-}
-
-async function readEnvFile(): Promise<string> {
-  try {
-    return await fs.readFile(ENV_PATH, 'utf8');
-  } catch {
-    try {
-      // First run: start from the documented template so the comments survive.
-      const template = await fs.readFile(EXAMPLE_PATH, 'utf8');
-      return template.replace(/^ANTHROPIC_API_KEY=.*$/m, 'ANTHROPIC_API_KEY=');
-    } catch {
-      return '';
-    }
-  }
-}
-
-/** Replace KEY=... in place, preserving comments and ordering. Appends if absent. */
-function upsert(contents: string, key: string, value: string): string {
-  const line = `${key}=${/[\s#"']/.test(value) ? JSON.stringify(value) : value}`;
-  const pattern = new RegExp(`^${key}=.*$`, 'm');
-  if (pattern.test(contents)) return contents.replace(pattern, line);
-  const separator = contents.endsWith('\n') || contents === '' ? '' : '\n';
-  return `${contents}${separator}${line}\n`;
-}
-
-function currentValues(contents: string): Map<string, string> {
-  const values = new Map<string, string>();
-  for (const raw of contents.split('\n')) {
-    const match = /^([A-Z0-9_]+)=(.*)$/.exec(raw.trim());
-    if (!match) continue;
-    const [, key, value] = match;
-    if (key) values.set(key, (value ?? '').replace(/^["']|["']$/g, '').trim());
-  }
-  return values;
-}
 
 /** Prompt with the terminal echo suppressed. */
 function promptHidden(question: string): Promise<string> {
@@ -110,7 +74,7 @@ async function main(): Promise<void> {
   const contents = await readEnvFile();
 
   if (flags.list === true) {
-    const values = currentValues(contents);
+    const values = parseEnv(contents);
     console.log(`\n.env — ${ENV_PATH}\n`);
     for (const key of SETTABLE) {
       const value = values.get(key);
@@ -126,7 +90,7 @@ async function main(): Promise<void> {
   }
 
   const name = String(flags.name ?? 'ANTHROPIC_API_KEY').toUpperCase();
-  if (!SETTABLE.includes(name as (typeof SETTABLE)[number])) {
+  if (!SETTABLE.includes(name)) {
     console.error(`Unknown key "${name}".\n\nSettable keys:\n  ${SETTABLE.join('\n  ')}`);
     process.exitCode = 1;
     return;
@@ -153,17 +117,9 @@ async function main(): Promise<void> {
   }
 
   // Catch the usual paste accidents before they become a confusing 401.
-  const warnings: string[] = [];
-  if (/\s/.test(value)) warnings.push('it contains whitespace');
-  if (/^["'<].*[">']$/.test(value)) warnings.push('it is wrapped in quotes or angle brackets');
-  if (name === 'ANTHROPIC_API_KEY' && !value.startsWith('sk-ant-')) {
-    warnings.push('an Anthropic key normally starts with "sk-ant-"');
-  }
+  const warnings = valueWarnings(name, value);
 
-  await fs.writeFile(ENV_PATH, upsert(contents, name, value), 'utf8');
-  await fs.chmod(ENV_PATH, 0o600).catch(() => {
-    /* best effort: Windows and some mounts don't support it */
-  });
+  await writeEnvFile(upsert(contents, name, value));
 
   console.log(`✔ ${name} saved as ${mask(value)}`);
   console.log(`  ${ENV_PATH} (permissions set to owner-only where supported)`);

@@ -20,7 +20,7 @@ npx playwright install chromium   # HTML -> PDF rendering
 npm run db:generate           # generate the Prisma client
 npm run db:push               # create prisma/dev.db from the schema
 
-npm run key                   # store your Anthropic key via a hidden prompt (nothing echoed)
+npm run setup                 # paste your API keys into a local browser form
 npm run doctor                # verify everything before you run a module
 ```
 
@@ -33,8 +33,22 @@ prints the exact fix under **next steps**.
 
 ### Adding your API keys
 
-Never paste a key into a chat, a commit, or a shell command (it lands in your
-shell history). Two safe ways in:
+Easiest way — a form in your browser, running on your own machine:
+
+```bash
+npm run setup
+```
+
+It prints a `http://127.0.0.1:<port>/?t=...` link and opens it. Paste each key
+into its box, press **Save to .env**, done. Boxes left blank keep their current
+value.
+
+That page is local-only by construction: the server binds to `127.0.0.1`,
+rejects any request that did not come over loopback or carries a foreign `Host`
+header, and requires a one-time token that only appears in your terminal.
+Nothing you type is uploaded, logged, or visible to Claude.
+
+Prefer the terminal? A hidden prompt does the same job:
 
 ```bash
 npm run key                          # hidden prompt for ANTHROPIC_API_KEY
@@ -42,12 +56,15 @@ npm run key -- --name WHOP_API_KEY   # any other credential
 npm run key -- --list                # what's set, masked
 ```
 
-`npm run key` never echoes what you type, never takes the value as an argument,
-and prints back only a masked fingerprint. It writes to `.env` and sets the file
-to owner-only permissions.
+Both write to `.env`, preserve its comments, set the file to owner-only
+permissions, and warn about the usual paste accidents — stray whitespace,
+wrapping quotes, a key that doesn't start with `sk-ant-`.
 
-Or edit `.env` by hand in your editor: put the value straight after the `=`, no
-quotes, no spaces (`ANTHROPIC_API_KEY=sk-ant-...`).
+You can also just edit `.env` in any text editor: put the value straight after
+the `=`, with no quotes and no spaces (`ANTHROPIC_API_KEY=sk-ant-...`).
+
+Never paste a key into a hosted web page, a chat, or a shell command — a shell
+command lands in your history in plaintext.
 
 Running in a Claude Code cloud session instead of locally? Set the variables on
 the environment (claude.ai/code → the cloud icon above the message box → hover

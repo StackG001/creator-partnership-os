@@ -10,6 +10,7 @@
   "scripts": {
     "doctor": "tsx src/scripts/doctor.ts",
     "key": "tsx src/scripts/set-key.ts",
+    "setup": "tsx src/scripts/setup.ts",
     "finder": "tsx src/modules/finder/cli.ts",
     "scorer": "tsx src/modules/scorer/cli.ts",
     "audit": "tsx src/modules/audit/cli.ts",
