@@ -62,9 +62,35 @@ async function timed<T>(fn: () => Promise<T>): Promise<[T, number]> {
   return [value, Date.now() - start];
 }
 
+/** The whole message, for pattern-matching the cause. */
+function rawMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * One readable line, for printing.
+ *
+ * Prisma (and some SDKs) put a blank line and a source code frame before the
+ * sentence that actually says what went wrong, so taking the first line prints
+ * nothing useful. Take the first line that reads like a message instead.
+ */
 function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message.split('\n')[0] ?? error.message;
-  return String(error);
+  const lines = rawMessage(error)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return String(error);
+
+  const isCodeFrame = (line: string) => /^(\d+\s|→|\||\^|at\s|\/.*:\d+:\d+$)/.test(line);
+  const meaningful = lines.filter((line) => !isCodeFrame(line));
+  if (!meaningful.length) return lines[0] as string;
+
+  // Prisma wraps the cause in a preamble and a code frame — "Invalid
+  // `prisma.source.count()` invocation in" first, then the frame, then the
+  // sentence that actually says what broke. For those, the last line is the
+  // one worth printing; for everything else it is the first.
+  const prismaWrapped = /^Invalid `prisma\..+` invocation/.test(meaningful[0] as string);
+  return (prismaWrapped ? meaningful[meaningful.length - 1] : meaningful[0]) as string;
 }
 
 // --- toolchain ---------------------------------------------------------------
@@ -244,19 +270,24 @@ async function checkDatabase(env: Env): Promise<void> {
       ms,
     );
   } catch (error) {
-    const message = errorMessage(error);
-    const needsGenerate = /did not initialize|@prisma\/client/i.test(message);
-    const needsPush = /does not exist|no such table/i.test(message);
+    // Classify against the full message: the sentence naming the cause is
+    // rarely on the first line.
+    const full = rawMessage(error);
+    const needsGenerate = /did not initialize|@prisma\/client/i.test(full);
+    const needsPush = /does not exist|no such table|P2021|P2022/i.test(full);
+    const unreachable = /unable to open the database file|P1003|ENOENT/i.test(full);
     record({
       group: 'database',
       name: 'prisma + schema',
       status: 'fail',
-      detail: message,
+      detail: errorMessage(error),
       fix: needsGenerate
         ? 'Run `npm run db:generate`.'
         : needsPush
-          ? 'Run `npm run db:push` to create the tables.'
-          : 'Check DATABASE_URL, then run `npm run db:push`.',
+          ? 'The schema has never been applied to this database — run `npm run db:push`.'
+          : unreachable
+            ? `No database at ${env.DATABASE_URL}. Run \`npm run db:push\` to create it, or fix DATABASE_URL.`
+            : 'Check DATABASE_URL, then run `npm run db:push`.',
     });
   }
 }
@@ -352,15 +383,29 @@ async function checkAnthropic(env: Env): Promise<void> {
 
 interface Probe {
   name: string;
+  /** Which variable holds this credential — named in the fix text. */
+  envKey: string;
   enabled: boolean;
   reason: string;
   run: () => Promise<Response>;
+}
+
+/** A short, single-line excerpt of an error body — often names the real cause. */
+async function readSnippet(response: Response): Promise<string> {
+  if (response.ok) return '';
+  try {
+    const text = (await response.text()).replace(/\s+/g, ' ').trim();
+    return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+  } catch {
+    return '';
+  }
 }
 
 async function checkOptionalApis(env: Env): Promise<void> {
   const probes: Probe[] = [
     {
       name: 'youtube data api',
+      envKey: 'YOUTUBE_API_KEY (or YT_API_KEY)',
       enabled: Boolean(env.YOUTUBE_API_KEY),
       reason: 'YOUTUBE_API_KEY not set',
       run: () =>
@@ -370,6 +415,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
     },
     {
       name: 'apify',
+      envKey: 'APIFY_TOKEN',
       enabled: Boolean(env.APIFY_TOKEN),
       reason: 'APIFY_TOKEN not set',
       run: () =>
@@ -379,6 +425,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
     },
     {
       name: 'brave search',
+      envKey: 'BRAVE_SEARCH_API_KEY',
       enabled: Boolean(env.BRAVE_SEARCH_API_KEY),
       reason: 'BRAVE_SEARCH_API_KEY not set',
       run: () =>
@@ -391,6 +438,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
     },
     {
       name: 'serper',
+      envKey: 'SERPER_API_KEY',
       enabled: Boolean(env.SERPER_API_KEY),
       reason: 'SERPER_API_KEY not set',
       run: () =>
@@ -405,6 +453,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
     },
     {
       name: 'whop',
+      envKey: 'WHOP_API_KEY',
       enabled: Boolean(env.WHOP_API_KEY),
       reason: 'WHOP_API_KEY not set',
       run: () =>
@@ -428,18 +477,31 @@ async function checkOptionalApis(env: Env): Promise<void> {
 
     try {
       const [response, ms] = await timed(probe.run);
-      const unauthorized = response.status === 401 || response.status === 403;
+      const body = await readSnippet(response);
+      const detail = [`HTTP ${response.status} ${response.statusText}`.trim(), body]
+        .filter(Boolean)
+        .join(' — ');
+
+      // 401 is unambiguous: the service saw the credential and refused it.
+      // 403 is not — an egress proxy or firewall that blocks the host answers
+      // 403 without the request ever reaching the service, so telling the user
+      // to rotate a working key would send them down the wrong path.
+      const rejected = response.status === 401;
+      const forbidden = response.status === 403;
+
       record(
         {
           group: 'api',
           name: probe.name,
-          status: unauthorized ? 'fail' : response.ok ? 'pass' : 'warn',
-          detail: `HTTP ${response.status} ${response.statusText}`.trim(),
-          fix: unauthorized
-            ? `The key was rejected (HTTP ${response.status}). Check the credential in .env.`
-            : response.ok
-              ? undefined
-              : 'Reachable but returned a non-2xx status — verify the plan/quota on that account.',
+          status: rejected || forbidden ? 'fail' : response.ok ? 'pass' : 'warn',
+          detail,
+          fix: rejected
+            ? `The credential was rejected (HTTP 401). Check ${probe.envKey} in .env.`
+            : forbidden
+              ? `HTTP 403 — either ${probe.envKey} lacks access, or something between this machine and the service is blocking it (a proxy, VPN or firewall; a sandboxed cloud session blocks most hosts by default). Re-run on an unrestricted network before rotating the key.`
+              : response.ok
+                ? undefined
+                : 'Reachable but returned a non-2xx status — verify the plan/quota on that account.',
         },
         ms,
       );
@@ -449,7 +511,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
         name: probe.name,
         status: 'fail',
         detail: errorMessage(error),
-        fix: 'Could not reach the service — check network access.',
+        fix: `Could not reach ${probe.name} at all — this is a network problem, not a bad ${probe.envKey}. Check connectivity, proxy settings and DNS.`,
       });
     }
   }

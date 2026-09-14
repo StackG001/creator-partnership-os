@@ -13,6 +13,7 @@
     "setup": "tsx src/scripts/setup.ts",
     "finder": "tsx src/modules/finder/cli.ts",
     "scorer": "tsx src/modules/scorer/cli.ts",
+    "shortlist": "tsx src/scripts/shortlist.ts",
     "audit": "tsx src/modules/audit/cli.ts",
     "outreach": "tsx src/modules/outreach/cli.ts",
     "product": "tsx src/modules/product/cli.ts",
@@ -24,6 +25,8 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:watch": "node --import tsx --test --watch \"src/**/*.test.ts\"",
     "dev": "next dev",
     "build": "next build",
     "start": "next start"

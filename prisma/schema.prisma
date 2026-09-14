@@ -70,7 +70,8 @@ model Creator {
   avgViews       Int?
   avgLikes       Int?
   avgComments    Int?
-  engagementRate Float? // 0-1, not a percentage
+  engagementRate Float? // 0-1, not a percentage: (avg likes + avg comments) / followers
+  engagementPerView Float? // 0-1: (avg likes + avg comments) / avg views — the fair read on YouTube
   postsPerWeek   Float?
   metricsAt      DateTime?
 
@@ -86,7 +87,9 @@ model Creator {
 
   // scoring (scorer module)
   score          Int? // 0-100
-  scoreBreakdown Json? // { reach, engagement, nicheClarity, productGap, monetisability, reachability }
+  scoreBreakdown Json? // per-component points + weights, see SCORE_WEIGHTS in src/lib/constants.ts
+  scoreJson      Json? // full scorer payload: { score, reasons[3], redFlags[], recommendedProductType, priceBand, verdict }
+  scoreVerdict   String? // ScoreVerdict: GO | MAYBE | NO — denormalised from scoreJson so the shortlist can sort on it
   scoredAt       DateTime?
   scoreModel     String?
 
@@ -95,7 +98,7 @@ model Creator {
   brandAt      DateTime?
 
   // pipeline
-  status          String  @default("DISCOVERED") // CreatorStatus: DISCOVERED | SCORED | AUDITED | CONTACTED | REPLIED | AGREED | LAUNCHED | DECLINED | DISQUALIFIED
+  status          String  @default("FOUND") // CreatorStatus: FOUND | SCORED | AUDITED | CONTACTED | REPLIED | AGREED | LAUNCHED | DECLINED | DISQUALIFIED
   disqualifiedFor String?
   outputDir       String? // outputs/<handle>
   raw             Json? // untouched payload from the discovery source

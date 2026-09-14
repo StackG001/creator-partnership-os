@@ -1,0 +1,57 @@
+{
+  "$comment": [
+    "CPC hints for the scorer's audience spending-power component (15 points).",
+    "Gerald: add rows as you gather real numbers. cpcUsd is the average cost per",
+    "click you see for that niche's commercial keywords — a proxy for how much",
+    "advertisers believe that audience is worth, which correlates with what they",
+    "will pay for a product. Anything not listed here falls back to the LLM's",
+    "own estimate alone, which is weaker but still works.",
+    "Match is case-insensitive substring against the creator's niche and bio."
+  ],
+  "niches": {
+    "credit repair": {
+      "cpcUsd": 12.5,
+      "notes": "High commercial intent; advertisers bid hard on credit repair terms."
+    },
+    "credit score": {
+      "cpcUsd": 9.8,
+      "notes": "Adjacent to credit repair, slightly broader and cheaper."
+    },
+    "personal finance": {
+      "cpcUsd": 6.4,
+      "notes": "Wide range — budgeting is cheap, debt and lending are expensive."
+    },
+    "debt": {
+      "cpcUsd": 14.2,
+      "notes": "Debt consolidation and settlement are among the priciest keywords."
+    },
+    "mortgage": {
+      "cpcUsd": 18.0,
+      "notes": "Very high CPC; audience is making a large financial decision."
+    },
+    "insurance": {
+      "cpcUsd": 21.5,
+      "notes": "Consistently the most expensive consumer vertical."
+    },
+    "real estate investing": {
+      "cpcUsd": 8.9,
+      "notes": "Buyers expect to spend on education."
+    },
+    "business coaching": {
+      "cpcUsd": 11.0,
+      "notes": "B2B-ish buyers with budget."
+    },
+    "notion templates": {
+      "cpcUsd": 1.4,
+      "notes": "Low CPC, but very high conversion on cheap digital products."
+    },
+    "fitness": {
+      "cpcUsd": 2.1,
+      "notes": "Large audiences, low per-click value; price low and sell volume."
+    },
+    "home barista": {
+      "cpcUsd": 1.1,
+      "notes": "Hobby spend, not problem spend. Price accordingly."
+    }
+  }
+}

@@ -37,6 +37,7 @@ export const envSchema = z.object({
   LLM_TRACE: bool.default(false),
 
   // discovery (optional until the finder lands)
+  // YT_API_KEY is accepted as an alias — see ALIASES below.
   YOUTUBE_API_KEY: z.string().optional(),
   APIFY_TOKEN: z.string().optional(),
   BRAVE_SEARCH_API_KEY: z.string().optional(),
@@ -66,11 +67,25 @@ export const OPTIONAL_ENV_KEYS = [
   'WHOP_COMPANY_ID',
 ] as const;
 
+/**
+ * Variables we answer to under more than one name. The canonical name wins when
+ * both are set; the alias is only a fallback, so nothing silently overrides an
+ * explicit value.
+ */
+const ALIASES: Record<string, string> = {
+  YT_API_KEY: 'YOUTUBE_API_KEY',
+  YOUTUBE_DATA_API_KEY: 'YOUTUBE_API_KEY',
+};
+
 /** Blank strings in .env mean "unset", not "set to empty". */
 function compact(source: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) {
     if (typeof value === 'string' && value.trim() !== '') out[key] = value.trim();
+  }
+  for (const [alias, canonical] of Object.entries(ALIASES)) {
+    const aliased = out[alias];
+    if (aliased && !out[canonical]) out[canonical] = aliased;
   }
   return out;
 }
