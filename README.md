@@ -48,6 +48,18 @@ rejects any request that did not come over loopback or carries a foreign `Host`
 header, and requires a one-time token that only appears in your terminal.
 Nothing you type is uploaded, logged, or visible to Claude.
 
+On ChromeOS (Crostini), WSL, or a remote VM, the browser sits outside the
+container, so loopback-only is unreachable. Add `--host`:
+
+```bash
+npm run setup -- --host --port 8123
+```
+
+That listens on all interfaces, which makes the form reachable from your local
+network while it runs — the one-time token is what keeps others out. Save your
+keys and press Ctrl+C promptly. On ChromeOS you may also need to forward the
+port in Settings → Linux development environment → Port forwarding.
+
 Prefer the terminal? A hidden prompt does the same job:
 
 ```bash

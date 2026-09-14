@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
+import os from 'node:os';
 import { exec } from 'node:child_process';
+import { parseFlags, type CliSpec } from '../lib/cli.js';
 import {
   CREDENTIAL_KEYS,
   ENV_PATH,
@@ -24,6 +26,30 @@ import {
  */
 
 const TOKEN = crypto.randomBytes(24).toString('hex');
+
+const spec: CliSpec = {
+  name: 'setup',
+  summary: 'Open a local form for pasting API keys into .env.',
+  examples: ['npm run setup', 'npm run setup -- --host   # ChromeOS/Crostini, WSL, a VM'],
+  flags: {
+    host: {
+      type: 'boolean',
+      description:
+        'Listen on all interfaces instead of loopback only. Needed when the browser runs outside this machine or container (ChromeOS Linux, WSL, a remote VM). The one-time token is still required.',
+    },
+    port: { type: 'string', description: 'Fixed port instead of a random free one.' },
+  },
+};
+
+/**
+ * With --host the browser is on the other side of a container or VM boundary,
+ * so the request cannot arrive over loopback and the Host header is whatever
+ * name got it here. The token is what protects the form in that case.
+ */
+function isAllowed(request: http.IncomingMessage, openHost: boolean): boolean {
+  if (openHost) return true;
+  return isLoopback(request);
+}
 
 function isLoopback(request: http.IncomingMessage): boolean {
   const address = request.socket.remoteAddress ?? '';
@@ -193,11 +219,31 @@ async function handleSave(body: string): Promise<{ ok: boolean; message: string 
   return { ok: true, message: lines.join('\n') };
 }
 
+/** A LAN address the browser can actually reach, for the --host case. */
+function lanAddress(): string | undefined {
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) return entry.address;
+    }
+  }
+  return undefined;
+}
+
 async function main(): Promise<void> {
+  const flags = parseFlags(spec);
+  const openHost = flags.host === true;
+  const fixedPort = flags.port ? Number(flags.port) : 0;
+
+  if (Number.isNaN(fixedPort)) {
+    console.error('--port must be a number.');
+    process.exitCode = 1;
+    return;
+  }
+
   const values = parseEnv(await readEnvFile());
 
   const server = http.createServer(async (request, response) => {
-    if (!isLoopback(request)) {
+    if (!isAllowed(request, openHost)) {
       response.writeHead(403).end('This page is only available on this computer.');
       return;
     }
@@ -234,7 +280,9 @@ async function main(): Promise<void> {
     response.writeHead(404).end('Not found');
   });
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) =>
+    server.listen(fixedPort, openHost ? '0.0.0.0' : '127.0.0.1', resolve),
+  );
   const { port } = server.address() as { port: number };
   const link = `http://127.0.0.1:${port}/?t=${TOKEN}`;
 
@@ -244,7 +292,18 @@ async function main(): Promise<void> {
   console.log(`  ${filled} of ${CREDENTIAL_KEYS.length} credentials currently set\n`);
   console.log('  Open this link in your browser:\n');
   console.log(`    ${link}\n`);
-  console.log('  It works only on this computer. Press Ctrl+C here when you are done.\n');
+
+  if (openHost) {
+    const lan = lanAddress();
+    console.log('  Browser on the other side of a container or VM (ChromeOS, WSL)?');
+    console.log('  Try the link above first; if it does not load, use:\n');
+    if (lan) console.log(`    http://${lan}:${port}/?t=${TOKEN}\n`);
+    console.log('  ! --host makes this form reachable from your local network while it');
+    console.log('    runs. The one-time token above is what keeps others out, so do not');
+    console.log('    share the link, and press Ctrl+C as soon as you have saved.\n');
+  } else {
+    console.log('  It works only on this computer. Press Ctrl+C here when you are done.\n');
+  }
 
   // Best effort: open the default browser. Harmless if it fails.
   const opener =
