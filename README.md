@@ -20,6 +20,7 @@ npx playwright install chromium   # HTML -> PDF rendering
 npm run db:generate           # generate the Prisma client
 npm run db:push               # create prisma/dev.db from the schema
 
+npm run key                   # store your Anthropic key via a hidden prompt (nothing echoed)
 npm run doctor                # verify everything before you run a module
 ```
 
@@ -29,6 +30,31 @@ its tables, the `outputs/` directory, Chromium's ability to render a PDF, and
 every API you hold a key for (all three Anthropic models, YouTube, Apify,
 Brave/Serper, Whop). It exits non-zero if anything required is broken and
 prints the exact fix under **next steps**.
+
+### Adding your API keys
+
+Never paste a key into a chat, a commit, or a shell command (it lands in your
+shell history). Two safe ways in:
+
+```bash
+npm run key                          # hidden prompt for ANTHROPIC_API_KEY
+npm run key -- --name WHOP_API_KEY   # any other credential
+npm run key -- --list                # what's set, masked
+```
+
+`npm run key` never echoes what you type, never takes the value as an argument,
+and prints back only a masked fingerprint. It writes to `.env` and sets the file
+to owner-only permissions.
+
+Or edit `.env` by hand in your editor: put the value straight after the `=`, no
+quotes, no spaces (`ANTHROPIC_API_KEY=sk-ant-...`).
+
+Running in a Claude Code cloud session instead of locally? Set the variables on
+the environment (claude.ai/code → the cloud icon above the message box → hover
+your environment → settings icon → **Environment variables**, in `.env` format).
+Sessions copy them in at startup, so `.env` is not needed at all — `npm run
+doctor` accepts either. Note that anyone using that environment, Claude
+included, can read those values.
 
 ```bash
 npm run doctor                      # full check

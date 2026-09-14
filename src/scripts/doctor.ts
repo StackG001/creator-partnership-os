@@ -83,18 +83,32 @@ function checkNode(): void {
 
 async function checkEnvFile(): Promise<void> {
   const envPath = path.resolve(process.cwd(), '.env');
+
   try {
     await fs.access(envPath);
     record({ group: 'toolchain', name: '.env file', status: 'pass', detail: envPath });
+    return;
   } catch {
-    record({
-      group: 'toolchain',
-      name: '.env file',
-      status: 'fail',
-      detail: 'not found',
-      fix: 'cp .env.example .env, then fill in ANTHROPIC_API_KEY.',
-    });
+    // No file is fine when the variables are supplied another way — a cloud
+    // environment's variable list, a CI secret store, or an `export` in the
+    // shell. Only the values matter; the file is just one way to set them.
   }
+
+  const supplied = REQUIRED_ENV_KEYS.filter((key) => process.env[key]?.trim());
+
+  record({
+    group: 'toolchain',
+    name: '.env file',
+    status: supplied.length === REQUIRED_ENV_KEYS.length ? 'pass' : 'fail',
+    detail:
+      supplied.length === REQUIRED_ENV_KEYS.length
+        ? 'not present — required variables come from the process environment'
+        : 'not found, and the required variables are not in the environment either',
+    fix:
+      supplied.length === REQUIRED_ENV_KEYS.length
+        ? undefined
+        : 'Run `npm run key` to add your Anthropic key without it appearing on screen, or cp .env.example .env and edit it.',
+  });
 }
 
 // --- environment -------------------------------------------------------------
