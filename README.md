@@ -94,6 +94,48 @@ npm run doctor -- --json            # machine-readable output
 
 ---
 
+## MCP servers
+
+`.mcp.json` is checked in, so any Claude Code session opened in this repo is
+offered the same servers. Claude asks for approval the first time; after that
+`claude mcp list` shows their status.
+
+### apify
+
+[`@apify/actors-mcp-server`](https://github.com/apify/apify-mcp-server) — search
+Apify Store, inspect an Actor's input schema, and run Actors from the session.
+This is the same platform the finder module scrapes Instagram through, so the
+two share one token.
+
+It reads `APIFY_TOKEN` from the environment, and Claude Code does **not** load
+`.env` — export it in the shell you launch Claude from:
+
+```bash
+export APIFY_TOKEN=$(grep -E '^APIFY_TOKEN=' .env | cut -d= -f2-)
+claude
+```
+
+Or set it once in your shell profile. In a Claude Code cloud session, add it to
+the environment's variables instead (see above) — it is already exported there.
+Without a token the server starts and immediately fails to authenticate.
+
+By default the server exposes Actor discovery plus the docs tools. To pin it to
+a fixed set — fewer tools in context, no discovery — add `--tools` to the args
+in `.mcp.json`:
+
+```json
+"args": ["-y", "@apify/actors-mcp-server", "--tools", "actors,docs,apify/instagram-scraper"]
+```
+
+Two things worth knowing: rental Actors only work against Apify's hosted
+endpoint (`https://mcp.apify.com`), not this stdio server, and the server sends
+usage telemetry unless you pass `--telemetry-enabled=false`.
+
+Running an Actor spends real Apify credits, so treat those calls the way the
+rest of this repo treats anything external — confirm before you fire one.
+
+---
+
 ## Pipeline commands
 
 Modules are scaffolded with their full flag contracts; the bodies come next.

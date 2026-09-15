@@ -59,6 +59,15 @@ file on disk.
 **Nothing external happens implicitly.** Outreach messages stay `DRAFT` until a
 human approves them; the publisher supports `--dry-run` and prints its payload.
 
+## MCP
+
+`.mcp.json` carries the project's MCP servers. `apify`
+(`@apify/actors-mcp-server`, stdio) is there for Actor discovery and runs — the
+same Apify account the finder scrapes Instagram through, authenticated with the
+same `APIFY_TOKEN`, which must be exported in the shell (Claude Code does not
+read `.env`). Running an Actor costs credits, so it falls under "nothing
+external happens implicitly" — confirm first.
+
 ## Commands
 
 `npm run doctor` first — it checks every env var, the database, Chromium and
