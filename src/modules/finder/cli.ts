@@ -1,25 +1,56 @@
-import { runCli, notImplemented, type CliSpec } from '../../lib/cli.js';
+import { runCli, type CliSpec } from '../../lib/cli.js';
+import { findCreators } from './index.js';
 
 export const spec: CliSpec = {
   name: 'finder',
-  summary: "Discover micro-creators (10k-200k) from hashtags, searches and lookalikes.",
+  summary: 'Discover YouTube micro-creators and record their metrics.',
   examples: [
-    "npm run finder -- --platform instagram --niche 'home barista' --limit 50",
-    "npm run finder -- --source src_abc123 --limit 25",
-    'npm run finder -- --platform youtube --query "notion templates" --min-engagement 0.03',
+    'npm run finder -- --channel @veritasium',
+    'npm run finder -- --query "budget meal prep" --limit 10 --niche cooking',
+    'npm run finder -- --channel @someone --dry-run',
   ],
   flags: {
-    platform: { type: 'string', description: 'instagram | youtube | both.', default: 'both' },
-    query: { type: 'string', description: 'Hashtag, search phrase or seed handle to expand from.' },
-    niche: { type: 'string', description: 'Niche label stored on every creator found.' },
-    source: { type: 'string', description: 'Re-run an existing Source by id.' },
-    limit: { type: 'string', description: 'Max creators to keep from this run.', default: '25' },
-    'min-followers': { type: 'string', description: 'Lower bound of the follower window.', default: '10000' },
-    'max-followers': { type: 'string', description: 'Upper bound of the follower window.', default: '200000' },
-    'min-engagement': { type: 'string', description: 'Minimum engagement rate, 0-1.', default: '0.02' },
+    channel: { type: 'string', description: 'A channel URL, @handle or UC… id. Costs 1 quota unit.' },
+    query: { type: 'string', description: 'Keyword search for channels. Costs 100 quota units.' },
+    limit: { type: 'string', description: 'Max channels to profile from a search.', default: '10' },
+    videos: { type: 'string', description: 'Recent uploads sampled for metrics.', default: '12' },
+    niche: { type: 'string', description: 'Niche label recorded on the source and creators.' },
   },
 };
 
-await runCli(spec, async () => {
-  notImplemented(spec);
+await runCli(spec, async ({ flags, log, dryRun, json }) => {
+  const result = await findCreators({
+    ...(flags.channel ? { channel: String(flags.channel) } : {}),
+    ...(flags.query ? { query: String(flags.query) } : {}),
+    limit: Number(flags.limit),
+    videos: Number(flags.videos),
+    ...(flags.niche ? { niche: String(flags.niche) } : {}),
+    dryRun,
+  });
+
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  for (const c of result.found) {
+    const mark = c.qualified ? '✔' : '·';
+    console.log(`\n${mark} ${c.handle}  ${c.displayName}`);
+    console.log(`    ${c.url}`);
+    console.log(
+      `    ${c.followers?.toLocaleString() ?? 'hidden'} subs · ${c.metrics.avgViews.toLocaleString()} avg views · ` +
+        `${(c.metrics.engagementRate * 100).toFixed(2)}% engagement · ${c.metrics.postsPerWeek}/wk` +
+        ` (n=${c.metrics.sampleSize})`,
+    );
+    if (c.evidence.hasDigitalProduct) {
+      console.log(`    sells already: ${c.evidence.matches.map((m) => m.domain).join(', ')}`);
+    }
+    if (!c.qualified) console.log(`    skipped: ${c.disqualifiedFor}`);
+  }
+
+  console.log(
+    `\n${result.found.length} profiled · ${result.qualified} qualified · ~${result.quotaUnits} quota units` +
+      (dryRun ? ' · dry run, nothing written' : ''),
+  );
+  log.info(dryRun ? 'dry run complete' : 'creators written');
 });

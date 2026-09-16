@@ -109,24 +109,30 @@ npm run doctor -- --json            # machine-readable output
 
 ## Pipeline commands
 
-Modules are scaffolded with their full flag contracts; the bodies come next.
-Each one exits `2` with its help text until it is implemented. Add `--help` to
-any of them.
+`finder`, `scorer` and `audit` are built and working. The rest are scaffolded
+with their full flag contracts and exit `2` with their help text until the
+bodies land. Add `--help` to any of them.
+
+The first three run as a chain — the finder writes the Creator row the other two
+read, so run them in order for a given handle. Each has a `--dry-run` that skips
+the model and the database, which is also the cheapest way to see what a run
+would do.
 
 ```bash
-# 1. discover candidates (10k-200k followers, engaged, no product yet)
-npm run finder -- --platform instagram --niche "home barista" --limit 50
-npm run finder -- --platform youtube --query "notion templates" --min-engagement 0.03
-npm run finder -- --source src_abc123 --limit 25
+# 1. discover candidates (10k-200k subs, engaged, no product yet)   [BUILT]
+npm run finder -- --channel @grantbakes                  # one known channel
+npm run finder -- --query "sourdough for beginners" --limit 8 --niche baking
+npm run finder -- --channel @grantbakes --dry-run        # profile, write nothing
 
-# 2. score product-fit and reachability, 0-100
-npm run scorer -- --handle jamesclearcoffee
+# 2. score product-fit and reachability, 0-100                     [BUILT]
+npm run scorer -- --handle grantbakes
 npm run scorer -- --all --limit 50
-npm run scorer -- --all --rescore
+npm run scorer -- --handle grantbakes --dry-run          # arithmetic only
 
-# 3. audit the audience: pillars, pains, monetisation gaps, product angles
-npm run audit -- --handle jamesclearcoffee
-npm run audit -- --handle jamesclearcoffee --posts 40 --refresh
+# 3. audit the audience: pillars, pains, monetisation gaps, angles  [BUILT]
+npm run audit -- --handle grantbakes
+npm run audit -- --handle grantbakes --posts 40 --refresh
+npm run audit -- --handle grantbakes --dry-run           # fetch + cache only
 
 # 4. capture the creator's voice, palette and typography
 npm run brand -- --handle jamesclearcoffee
@@ -189,6 +195,7 @@ src/
       README.md    what this module owns
   lib/
     proxy.ts       tells an egress proxy's refusal from a rejected credential
+    youtube.ts     YouTube Data API v3 client (channels, videos, comments)
   scripts/
     doctor.ts      the environment check
   app/             Next.js shell (UI comes after the CLIs work)
