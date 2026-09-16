@@ -31,6 +31,19 @@ every API you hold a key for (all three Anthropic models, YouTube, Apify,
 Brave/Serper, Whop). It exits non-zero if anything required is broken and
 prints the exact fix under **next steps**.
 
+If you run it somewhere that restricts outbound traffic — Claude Code on the
+web, or CI behind an egress proxy — a host the environment does not allow shows
+up as a warning, not a failed credential:
+
+```
+! whop   blocked before reaching api.whop.com — Host not in allowlist: ...
+```
+
+The proxy refuses these before the request leaves the machine, so the key was
+never sent and is still untested. Add the host to the environment's egress
+allowlist, or run the doctor somewhere with direct access. A key the service
+itself rejects still reports as a failure, as it should.
+
 ### Adding your API keys
 
 Easiest way — a form in your browser, running on your own machine:
@@ -174,6 +187,8 @@ src/
       cli.ts       entry point and flags
       index.ts     the typed functions the CLI calls
       README.md    what this module owns
+  lib/
+    proxy.ts       tells an egress proxy's refusal from a rejected credential
   scripts/
     doctor.ts      the environment check
   app/             Next.js shell (UI comes after the CLIs work)
