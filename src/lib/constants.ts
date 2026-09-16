@@ -81,6 +81,56 @@ export const QUALIFICATION = {
   minEngagementRate: 0.02,
 } as const;
 
+/**
+ * How the scorer weighs each dimension into the single 0-100 score. Reach and
+ * engagement are computed from metrics; the other four are the model's read of
+ * the evidence. Weights must sum to 100.
+ */
+export const SCORE_WEIGHTS = {
+  reach: 15,
+  engagement: 25,
+  nicheClarity: 15,
+  productGap: 25,
+  monetisability: 12,
+  reachability: 8,
+} as const;
+
+export type ScoreDimension = keyof typeof SCORE_WEIGHTS;
+
+export const SCORE_DIMENSIONS = Object.keys(SCORE_WEIGHTS) as ScoreDimension[];
+
+/** Dimensions the model judges; the rest are arithmetic on the metrics. */
+export const JUDGED_DIMENSIONS = [
+  'nicheClarity',
+  'productGap',
+  'monetisability',
+  'reachability',
+] as const satisfies readonly ScoreDimension[];
+
+/**
+ * Domains that mean a creator already sells a digital product — the one
+ * disqualifier the thesis cares about most, since the whole offer is "you have
+ * an audience and nothing to sell them".
+ */
+export const PRODUCT_PLATFORM_DOMAINS = [
+  'gumroad.com',
+  'teachable.com',
+  'kajabi.com',
+  'thinkific.com',
+  'podia.com',
+  'whop.com',
+  'skool.com',
+  'payhip.com',
+  'lemonsqueezy.com',
+  'stan.store',
+  'beacons.ai/store',
+  'ko-fi.com/s/',
+  'udemy.com',
+  'circle.so',
+  'mighty.co',
+  'substack.com/subscribe',
+] as const;
+
 /** Target shape of the generated PDF. */
 export const PRODUCT_SPEC = {
   minPages: 35,

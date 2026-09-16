@@ -10,6 +10,7 @@ import {
   type Env,
 } from '../lib/env.js';
 import { ARTIFACT_DIRS } from '../lib/paths.js';
+import { looksBlocked, proxyBlock, unblockFix } from '../lib/proxy.js';
 
 /**
  * `npm run doctor` — one command that answers "can this machine run the OS?".
@@ -309,6 +310,16 @@ async function checkChromium(env: Env): Promise<void> {
 
 // --- apis --------------------------------------------------------------------
 
+/** Where the SDK actually sends requests — a gateway override changes the host. */
+function anthropicHost(env: Env): string {
+  if (!env.ANTHROPIC_BASE_URL) return 'api.anthropic.com';
+  try {
+    return new URL(env.ANTHROPIC_BASE_URL).host;
+  } catch {
+    return env.ANTHROPIC_BASE_URL;
+  }
+}
+
 async function checkAnthropic(env: Env): Promise<void> {
   const models = [
     ['default', env.ANTHROPIC_MODEL],
@@ -326,13 +337,16 @@ async function checkAnthropic(env: Env): Promise<void> {
           name: `anthropic ${tier}`,
           status: result.ok ? 'pass' : 'warn',
           detail: result.ok
-            ? `${model} responded`
-            : `${model} responded, but not with the expected text`,
+            ? `${model} responded${result.note ? ` — ${result.note}` : ''}`
+            : `${model} responded, but ${result.note ?? 'not with the expected text'}`,
         },
         ms,
       );
     } catch (error) {
       const message = errorMessage(error);
+      // Checked first: a proxy refusal can carry a status that would otherwise
+      // read as a rejected key, and the key never left the machine.
+      const blocked = looksBlocked(message);
       const auth = /401|authentication|invalid x-api-key/i.test(message);
       const missingModel = /404|not_found|model/i.test(message);
       record({
@@ -340,11 +354,13 @@ async function checkAnthropic(env: Env): Promise<void> {
         name: `anthropic ${tier}`,
         status: 'fail',
         detail: `${model}: ${message}`,
-        fix: auth
-          ? 'ANTHROPIC_API_KEY is rejected — regenerate it at console.anthropic.com/settings/keys.'
-          : missingModel
-            ? `Model "${model}" is not available to this key. Change the matching ANTHROPIC_MODEL* value in .env.`
-            : 'Could not reach the Anthropic API — check network access.',
+        fix: blocked
+          ? unblockFix(anthropicHost(env))
+          : auth
+            ? 'ANTHROPIC_API_KEY is rejected — regenerate it at console.anthropic.com/settings/keys.'
+            : missingModel
+              ? `Model "${model}" is not available to this key. Change the matching ANTHROPIC_MODEL* value in .env.`
+              : 'Could not reach the Anthropic API — check network access.',
       });
     }
   }
@@ -352,6 +368,8 @@ async function checkAnthropic(env: Env): Promise<void> {
 
 interface Probe {
   name: string;
+  /** Hostname this probe talks to, so a blocked host can be named in the fix. */
+  host: string;
   enabled: boolean;
   reason: string;
   run: () => Promise<Response>;
@@ -361,6 +379,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
   const probes: Probe[] = [
     {
       name: 'youtube data api',
+      host: 'www.googleapis.com',
       enabled: Boolean(env.YOUTUBE_API_KEY),
       reason: 'YOUTUBE_API_KEY not set',
       run: () =>
@@ -370,6 +389,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
     },
     {
       name: 'apify',
+      host: 'api.apify.com',
       enabled: Boolean(env.APIFY_TOKEN),
       reason: 'APIFY_TOKEN not set',
       run: () =>
@@ -379,6 +399,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
     },
     {
       name: 'brave search',
+      host: 'api.search.brave.com',
       enabled: Boolean(env.BRAVE_SEARCH_API_KEY),
       reason: 'BRAVE_SEARCH_API_KEY not set',
       run: () =>
@@ -391,6 +412,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
     },
     {
       name: 'serper',
+      host: 'google.serper.dev',
       enabled: Boolean(env.SERPER_API_KEY),
       reason: 'SERPER_API_KEY not set',
       run: () =>
@@ -405,6 +427,7 @@ async function checkOptionalApis(env: Env): Promise<void> {
     },
     {
       name: 'whop',
+      host: 'api.whop.com',
       enabled: Boolean(env.WHOP_API_KEY),
       reason: 'WHOP_API_KEY not set',
       run: () =>
@@ -428,6 +451,24 @@ async function checkOptionalApis(env: Env): Promise<void> {
 
     try {
       const [response, ms] = await timed(probe.run);
+
+      // A blocked host is an environment limit, not a bad key: warn (so it
+      // never fails an otherwise healthy machine) and say what really happened.
+      const blocked = await proxyBlock(response);
+      if (blocked) {
+        record(
+          {
+            group: 'api',
+            name: probe.name,
+            status: 'warn',
+            detail: `blocked before reaching ${probe.host} — ${blocked}`,
+            fix: unblockFix(probe.host),
+          },
+          ms,
+        );
+        continue;
+      }
+
       const unauthorized = response.status === 401 || response.status === 403;
       record(
         {
@@ -444,12 +485,14 @@ async function checkOptionalApis(env: Env): Promise<void> {
         ms,
       );
     } catch (error) {
+      const message = errorMessage(error);
+      const blocked = looksBlocked(message);
       record({
         group: 'api',
         name: probe.name,
-        status: 'fail',
-        detail: errorMessage(error),
-        fix: 'Could not reach the service — check network access.',
+        status: blocked ? 'warn' : 'fail',
+        detail: blocked ? `blocked before reaching ${probe.host} — ${message}` : message,
+        fix: blocked ? unblockFix(probe.host) : 'Could not reach the service — check network access.',
       });
     }
   }
