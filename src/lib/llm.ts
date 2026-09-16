@@ -338,18 +338,59 @@ export async function completeJSON<T>(
   );
 }
 
-/** Cheap connectivity probe. Used by `npm run doctor`. */
-export async function ping(model?: string): Promise<{ model: string; ok: boolean }> {
-  const target = model ?? resolveModel({ tier: 'fast' });
-  const message = await anthropic().messages.create({
-    model: target,
-    max_tokens: 8,
-    messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
-  });
+/**
+ * Output budget for the probe. A thinking-enabled model spends this budget on a
+ * reasoning block *before* it emits any prose, so a handful of tokens comes back
+ * with no text at all — leave room for both the reasoning and the word.
+ */
+const PING_MAX_TOKENS = 64;
+
+export interface PingResult {
+  model: string;
+  /** The key reached this model and it answered. */
+  ok: boolean;
+  /** How it answered, when that is worth saying out loud. */
+  note?: string;
+}
+
+/**
+ * Reading of a probe response, split out from the call so it can be exercised
+ * against captured payloads — a model only occasionally returns the
+ * thinking-only shape below, so it cannot be provoked on demand.
+ *
+ * What the probe actually tests is whether the key reaches the model, and a
+ * response proves that however it is shaped. A model that spent the whole
+ * budget reasoning emits no text at all: a quirk of the budget, not a fault, so
+ * it must not read the same as a model answering nonsense.
+ */
+export function interpretPing(
+  message: Pick<Anthropic.Message, 'content' | 'stop_reason'>,
+): Omit<PingResult, 'model'> {
   const text = message.content
     .filter((block): block is Anthropic.TextBlock => block.type === 'text')
     .map((block) => block.text)
     .join('')
-    .toLowerCase();
-  return { model: target, ok: text.includes('ok') };
+    .trim();
+
+  if (text.toLowerCase().includes('ok')) return { ok: true };
+
+  const reasoned = message.content.some(
+    (block) => block.type === 'thinking' || block.type === 'redacted_thinking',
+  );
+  if (reasoned && message.stop_reason === 'max_tokens') {
+    return { ok: true, note: 'reasoning filled the probe budget' };
+  }
+
+  return { ok: false, note: text ? `said "${text.slice(0, 40)}"` : 'returned no text' };
+}
+
+/** Cheap connectivity probe. Used by `npm run doctor`. */
+export async function ping(model?: string): Promise<PingResult> {
+  const target = model ?? resolveModel({ tier: 'fast' });
+  const message = await anthropic().messages.create({
+    model: target,
+    max_tokens: PING_MAX_TOKENS,
+    messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+  });
+  return { model: target, ...interpretPing(message) };
 }

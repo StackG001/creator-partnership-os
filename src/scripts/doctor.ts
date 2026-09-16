@@ -337,8 +337,8 @@ async function checkAnthropic(env: Env): Promise<void> {
           name: `anthropic ${tier}`,
           status: result.ok ? 'pass' : 'warn',
           detail: result.ok
-            ? `${model} responded`
-            : `${model} responded, but not with the expected text`,
+            ? `${model} responded${result.note ? ` — ${result.note}` : ''}`
+            : `${model} responded, but ${result.note ?? 'not with the expected text'}`,
         },
         ms,
       );
