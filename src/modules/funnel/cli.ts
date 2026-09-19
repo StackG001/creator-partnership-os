@@ -1,4 +1,5 @@
-import { runCli, notImplemented, type CliSpec } from '../../lib/cli.js';
+import { runCli, type CliSpec } from '../../lib/cli.js';
+import { buildFunnel } from './index.js';
 
 export const spec: CliSpec = {
   name: 'funnel',
@@ -16,6 +17,27 @@ export const spec: CliSpec = {
   },
 };
 
-await runCli(spec, async () => {
-  notImplemented(spec);
+await runCli(spec, async (ctx) => {
+  if (ctx.dryRun) {
+    throw new Error('funnel calls the Anthropic API to write copy — --dry-run is not supported.');
+  }
+
+  const copy = await buildFunnel(
+    String(ctx.flags.handle),
+    {
+      priceCents: Number(ctx.flags.price ?? 3700),
+      bumpPriceCents: Number(ctx.flags['bump-price'] ?? 1700),
+      upsellPriceCents: Number(ctx.flags['upsell-price'] ?? 9700),
+    },
+    ctx.flags.product ? String(ctx.flags.product) : undefined,
+  );
+
+  if (ctx.json) {
+    console.log(JSON.stringify(copy, null, 2));
+    return;
+  }
+
+  ctx.log.info(`headline: ${copy.salesPage.headline}`);
+  ctx.log.info(`order bump: ${copy.orderBump.title}`);
+  ctx.log.info(`upsell: ${copy.upsell.title}`);
 });

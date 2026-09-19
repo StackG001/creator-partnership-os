@@ -52,6 +52,11 @@ export const KEY_HELP: Record<string, { label: string; where: string; required: 
     where: 'whop.com/dashboard — the biz_... id',
     required: false,
   },
+  RESEND_API_KEY: {
+    label: 'Resend API key (sends APPROVED outreach emails)',
+    where: 'resend.com/api-keys',
+    required: false,
+  },
 };
 
 /** Show enough to tell two keys apart, never the key. */

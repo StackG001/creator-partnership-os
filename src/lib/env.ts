@@ -46,6 +46,9 @@ export const envSchema = z.object({
   WHOP_API_KEY: z.string().optional(),
   WHOP_COMPANY_ID: z.string().optional(),
 
+  // outreach sending (optional — outreach drafts without it; APPROVED emails need it to send)
+  RESEND_API_KEY: z.string().optional(),
+
   // local behaviour
   OUTPUTS_DIR: z.string().default('./outputs'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
@@ -64,6 +67,7 @@ export const OPTIONAL_ENV_KEYS = [
   'SERPER_API_KEY',
   'WHOP_API_KEY',
   'WHOP_COMPANY_ID',
+  'RESEND_API_KEY',
 ] as const;
 
 /** Blank strings in .env mean "unset", not "set to empty". */

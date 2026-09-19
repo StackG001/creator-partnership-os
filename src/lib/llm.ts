@@ -38,11 +38,19 @@ export interface LlmResult<T> {
   stopReason: string | null;
 }
 
+export interface ImageInput {
+  /** Base64-encoded image bytes, no data: prefix. */
+  data: string;
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+}
+
 interface BaseOptions {
   /** System prompt: role, constraints, output rules. */
   system: string;
   /** User prompt: the actual task and its inputs. */
   prompt: string;
+  /** Images to attach before the prompt text, for vision reads (e.g. visual style). */
+  images?: ImageInput[];
   /** Pick a tier, or pass `model` to name one explicitly. */
   tier?: ModelTier;
   model?: string;
@@ -52,6 +60,20 @@ interface BaseOptions {
   label?: string;
   /** Prior turns, for multi-step flows that keep context. */
   messages?: Anthropic.MessageParam[];
+}
+
+/** Builds the user message content: plain string, or image blocks + text when images are attached. */
+function userContent(options: BaseOptions): Anthropic.MessageParam['content'] {
+  if (!options.images?.length) return options.prompt;
+  return [
+    ...options.images.map(
+      (image): Anthropic.ImageBlockParam => ({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mediaType, data: image.data },
+      }),
+    ),
+    { type: 'text', text: options.prompt },
+  ];
 }
 
 export interface CompleteJsonOptions<T> extends BaseOptions {
@@ -187,7 +209,7 @@ export async function completeText(options: BaseOptions): Promise<LlmResult<stri
 
   const messages: Anthropic.MessageParam[] = [
     ...(options.messages ?? []),
-    { role: 'user', content: options.prompt },
+    { role: 'user', content: userContent(options) },
   ];
 
   const started = Date.now();
@@ -246,7 +268,7 @@ export async function completeJSON<T>(
 
   const messages: Anthropic.MessageParam[] = [
     ...(options.messages ?? []),
-    { role: 'user', content: options.prompt },
+    { role: 'user', content: userContent(options) },
   ];
 
   let usage = EMPTY_USAGE;
@@ -266,9 +288,12 @@ export async function completeJSON<T>(
 
     usage = addUsage(usage, readUsage(message));
 
-    const toolUse = message.content.find(
-      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
-    );
+    // If the model emits more than one tool_use in a turn, the last one is the
+    // one it "settled on" — validate against that, not whichever came first.
+    let toolUse: Anthropic.ToolUseBlock | undefined;
+    for (const block of message.content) {
+      if (block.type === 'tool_use') toolUse = block;
+    }
 
     if (!toolUse) {
       lastError = `The model returned no ${toolName} tool call (stop_reason: ${message.stop_reason}).`;
@@ -305,19 +330,25 @@ export async function completeJSON<T>(
       }
 
       lastError = formatZodError(parsed.error);
-      // Show the model exactly what it got wrong and let it correct itself.
+      // Every tool_use block in this turn needs a matching tool_result — the API
+      // rejects the next request otherwise. The model can emit more than one
+      // (e.g. a stray duplicate call) even with tool_choice forcing a single tool.
+      const toolUseBlocks = message.content.filter(
+        (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
+      );
       messages.push(
         { role: 'assistant', content: message.content },
         {
           role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: toolUse.id,
-              is_error: true,
-              content: `Your response did not match the schema:\n${lastError}\n\nCall ${toolName} again with corrected data. Do not explain, just call the tool.`,
-            },
-          ],
+          content: toolUseBlocks.map((block) => ({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            is_error: true,
+            content:
+              block.id === toolUse.id
+                ? `Your response did not match the schema:\n${lastError}\n\nCall ${toolName} again with corrected data. Do not explain, just call the tool.`
+                : 'Ignored — superseded by another tool call in the same turn.',
+          })),
         },
       );
     }

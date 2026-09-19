@@ -126,6 +126,7 @@ const OPTIONAL_UNLOCKS: Record<(typeof OPTIONAL_ENV_KEYS)[number], string> = {
   SERPER_API_KEY: 'product: web research (alternative to Brave)',
   WHOP_API_KEY: 'publisher: creating products and checkout links',
   WHOP_COMPANY_ID: 'publisher: which Whop company to publish under',
+  RESEND_API_KEY: 'outreach: sending APPROVED emails (drafting works without it)',
 };
 
 function checkEnv(): Env | undefined {

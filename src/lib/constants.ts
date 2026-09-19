@@ -88,3 +88,10 @@ export const PRODUCT_SPEC = {
   /** Rough words per rendered A4 page at our body size — used to size outlines. */
   wordsPerPage: 320,
 } as const;
+
+/** Identity every outreach message sends from and signs off as. */
+export const OUTREACH_SENDER = {
+  name: 'Gerald Ebere Ozokwelu',
+  email: 'gerald@iclipmedia.com',
+  company: 'iClipmedia',
+} as const;

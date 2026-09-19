@@ -1,4 +1,5 @@
-import { runCli, notImplemented, type CliSpec } from '../../lib/cli.js';
+import { runCli, type CliSpec } from '../../lib/cli.js';
+import { publishLaunch, syncLaunchStats } from './index.js';
 
 export const spec: CliSpec = {
   name: 'publisher',
@@ -16,6 +17,38 @@ export const spec: CliSpec = {
   },
 };
 
-await runCli(spec, async () => {
-  notImplemented(spec);
+await runCli(spec, async (ctx) => {
+  if (ctx.flags['sync-stats']) {
+    const stats = await syncLaunchStats();
+    if (ctx.json) {
+      console.log(JSON.stringify(stats, null, 2));
+    } else {
+      for (const s of stats) {
+        ctx.log.info(`${s.launchId}: ${s.sales} sales, $${(s.revenueCents / 100).toFixed(2)} revenue`);
+      }
+      ctx.log.info(`synced ${stats.length} live launch(es)`);
+    }
+    return;
+  }
+
+  if (!ctx.flags.handle) {
+    throw new Error('--handle is required unless --sync-stats is used.');
+  }
+
+  const result = await publishLaunch(String(ctx.flags.handle), Number(ctx.flags['rev-share'] ?? 50), {
+    dryRun: ctx.dryRun,
+    productId: ctx.flags.product ? String(ctx.flags.product) : undefined,
+  });
+
+  if (ctx.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (result.dryRun) {
+    ctx.log.info('Dry run complete — nothing was published. Re-run without --dry-run to go live.');
+  } else {
+    ctx.log.info(`published: ${result.url}`);
+    ctx.log.info(`launchId: ${result.launchId}`);
+  }
 });

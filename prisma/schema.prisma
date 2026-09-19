@@ -84,6 +84,13 @@ model Creator {
   contactMethod String? // ContactMethod: EMAIL | IG_DM | YT_ABOUT | WEBSITE_FORM | MANAGER
   contactNotes  String?
 
+  // cross-platform links (audit module: best-effort, extracted from bio/description/link-in-bio)
+  youtubeUrl    String?
+  instagramUrl  String?
+  tiktokUrl     String?
+  websiteUrl    String?
+  businessEmail String?
+
   // scoring (scorer module)
   score          Int? // 0-100
   scoreBreakdown Json? // { reach, engagement, nicheClarity, productGap, monetisability, reachability }
@@ -210,6 +217,7 @@ model OutreachMessage {
   channel  String // OutreachChannel: EMAIL | IG_DM | YT_ABOUT | X_DM | MANUAL
   sequence Int     @default(1) // 1 = first touch, 2+ = follow-ups
   variant  String? // A/B label
+  to       String? // recipient address/handle — e.g. business email for EMAIL, prefilled from the audit
   subject  String?
   body     String
   hooks    Json? // the personalisation the message leans on, for later analysis
