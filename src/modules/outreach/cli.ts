@@ -1,6 +1,13 @@
 import { runCli, type CliSpec } from '../../lib/cli.js';
 import { OUTREACH_CHANNELS, OUTREACH_SENDER, type OutreachChannel } from '../../lib/constants.js';
-import { approveOutreachMessage, draftOutreach, sendOutreachMessage } from './index.js';
+import {
+  approveOutreachMessage,
+  draftOutreach,
+  listFollowUpsDue,
+  logReply,
+  sendOutreachMessage,
+  type ReplyOutcome,
+} from './index.js';
 
 export const spec: CliSpec = {
   name: 'outreach',
@@ -12,6 +19,10 @@ export const spec: CliSpec = {
     'npm run outreach -- --approve cmu5abc123',
     'npm run outreach -- --send cmu5abc123 --dry-run',
     'npm run outreach -- --send cmu5abc123',
+    'npm run outreach -- --send cmu5abc123 --test-to me@example.com',
+    'npm run outreach -- --due',
+    'npm run outreach -- --replied grantbakes --status interested',
+    'npm run outreach -- --replied grantbakes --status declined',
   ],
   flags: {
     handle: { type: 'string', description: 'Creator handle to write to (drafting mode).' },
@@ -20,6 +31,22 @@ export const spec: CliSpec = {
     variants: { type: 'string', description: 'How many variants to draft.', default: '2' },
     approve: { type: 'string', description: 'Mark a DRAFT OutreachMessage id as APPROVED.' },
     send: { type: 'string', description: 'Send an APPROVED OutreachMessage id via Resend (EMAIL only).' },
+    'test-to': {
+      type: 'string',
+      description: 'With --send: deliver to this address instead of the real recipient. Subject gets a [TEST] prefix; the message is NOT marked SENT.',
+    },
+    due: {
+      type: 'boolean',
+      description: 'List creators due a follow-up (FOLLOW_UP.businessDays after their last send, no reply logged, excludes DECLINED/AGREED and anyone whose closing note (seq FOLLOW_UP.finalSequence) is already sent).',
+    },
+    replied: {
+      type: 'string',
+      description: 'Log a reply from this creator handle. Requires --status.',
+    },
+    status: {
+      type: 'string',
+      description: 'With --replied: interested | declined | agreed. "interested" maps to the schema\'s REPLIED status.',
+    },
   },
 };
 
@@ -33,7 +60,52 @@ function parseChannel(raw: string): OutreachChannel {
   );
 }
 
+const REPLY_OUTCOMES: readonly ReplyOutcome[] = ['interested', 'declined', 'agreed'];
+
+function parseReplyOutcome(raw: string): ReplyOutcome {
+  const normalized = raw.trim().toLowerCase();
+  if ((REPLY_OUTCOMES as readonly string[]).includes(normalized)) return normalized as ReplyOutcome;
+  throw new Error(`Unknown --status "${raw}" — expected one of: ${REPLY_OUTCOMES.join(', ')}`);
+}
+
 await runCli(spec, async (ctx) => {
+  if (ctx.flags.due) {
+    if (ctx.dryRun) throw new Error('--due only reads the database — --dry-run has nothing to skip.');
+    const due = await listFollowUpsDue();
+    if (ctx.json) {
+      console.log(JSON.stringify(due, null, 2));
+      return;
+    }
+    if (!due.length) {
+      ctx.log.info('No creators are waiting on a follow-up.');
+      return;
+    }
+    for (const d of due) {
+      const sent = d.lastSentAt.toISOString().slice(0, 10);
+      const dueDate = d.dueAt.toISOString().slice(0, 10);
+      const label = d.dueNow ? 'DUE NOW' : `due ${dueDate}`;
+      ctx.log.info(
+        `@${d.handle} · ${d.channel} · seq ${d.lastSequence} sent ${sent} · next seq ${d.nextSequence} · ${label}`,
+      );
+    }
+    return;
+  }
+
+  if (ctx.flags.replied) {
+    if (ctx.dryRun) throw new Error('--replied is a local status change — --dry-run has nothing to skip.');
+    if (!ctx.flags.status) throw new Error('--replied requires --status <interested|declined|agreed>.');
+    const outcome = parseReplyOutcome(String(ctx.flags.status));
+    const result = await logReply(String(ctx.flags.replied), outcome);
+    if (ctx.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    ctx.log.info(
+      `@${result.handle} · message ${result.messageId} marked replied (${outcome}) · Creator.status -> ${result.creatorStatus}`,
+    );
+    return;
+  }
+
   if (ctx.flags.approve) {
     if (ctx.dryRun) throw new Error('--approve is a local status change — --dry-run has nothing to skip.');
     const result = await approveOutreachMessage(String(ctx.flags.approve));
@@ -51,13 +123,16 @@ await runCli(spec, async (ctx) => {
   }
 
   if (ctx.flags.send) {
-    const result = await sendOutreachMessage(String(ctx.flags.send), { dryRun: ctx.dryRun });
+    const testTo = ctx.flags['test-to'] ? String(ctx.flags['test-to']) : undefined;
+    const result = await sendOutreachMessage(String(ctx.flags.send), { dryRun: ctx.dryRun, testTo });
     if (ctx.json) {
       console.log(JSON.stringify(result, null, 2));
       return;
     }
     if (result.dryRun) {
       ctx.log.info('Dry run complete — nothing was sent. Re-run without --dry-run to go live.');
+    } else if (result.test) {
+      ctx.log.info(`TEST sent to ${result.to} · Resend id ${result.externalId} · message left as APPROVED, not SENT`);
     } else {
       ctx.log.info(`sent to ${result.to} · Resend id ${result.externalId}`);
     }

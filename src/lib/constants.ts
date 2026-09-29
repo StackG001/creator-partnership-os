@@ -95,3 +95,11 @@ export const OUTREACH_SENDER = {
   email: 'gerald@iclipmedia.com',
   company: 'iClipmedia',
 } as const;
+
+/** How long to wait after a send, with no reply, before the next follow-up is due. */
+export const FOLLOW_UP = {
+  /** Weekends don't count — a Friday send is due the following Wednesday. */
+  businessDays: 3,
+  /** Sequence 3 is the closing note — once it's sent, no further follow-up is owed. */
+  finalSequence: 3,
+} as const;
