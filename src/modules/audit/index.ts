@@ -710,6 +710,9 @@ export async function auditCreator(
       businessEmail: socialLinks.businessEmail,
     },
     update: {
+      platform,
+      displayName: profile.displayName,
+      profileUrl: canonicalUrl,
       niche: report.niche,
       bio: profile.bio,
       followers: profile.followers,

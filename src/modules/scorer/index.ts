@@ -10,7 +10,8 @@ const log = createLogger('scorer');
 
 export interface ScoreBreakdown {
   reach: number;
-  engagement: number;
+  /** null = engagement data was never measured (e.g. onboarded via `audit` directly, not `finder`) — distinct from a real, measured zero. */
+  engagement: number | null;
   nicheClarity: number;
   productGap: number;
   monetisability: number;
@@ -31,13 +32,19 @@ function clamp(n: number, lo = 0, hi = 100): number {
   return Math.min(hi, Math.max(lo, n));
 }
 
+/**
+ * Log-scaled across the follower window, but floored at QUALIFICATION.reachFloor
+ * for anyone inside it — clearing the qualification minimum is real credit,
+ * not a near-zero score. Followers at or below the minimum get exactly the
+ * floor; the scale runs floor..100 up to maxFollowers.
+ */
 function scoreReach(followers: number | null): number {
   if (!followers || followers <= 0) return 0;
-  const { minFollowers, maxFollowers } = QUALIFICATION;
+  const { minFollowers, maxFollowers, reachFloor } = QUALIFICATION;
   const ratio =
     (Math.log10(followers) - Math.log10(minFollowers)) /
     (Math.log10(maxFollowers) - Math.log10(minFollowers));
-  return Math.round(clamp(ratio * 100));
+  return Math.round(clamp(reachFloor + (100 - reachFloor) * ratio, reachFloor, 100));
 }
 
 /** Posting less than ~2x/week tapers the engagement score — a hot rate on a dormant account is a weaker signal. */
@@ -48,8 +55,15 @@ function cadenceFactor(postsPerWeek: number | null): number {
   return 0.85 + (postsPerWeek / 2) * 0.15;
 }
 
-function scoreEngagement(engagementRate: number | null, postsPerWeek: number | null): number {
-  if (!engagementRate || engagementRate <= 0) return 0;
+/**
+ * null means "never measured" (e.g. this Creator was onboarded via `audit`
+ * directly, which doesn't compute engagementRate — only `finder` does) and
+ * must NOT be treated as a real zero. A genuinely-measured zero (rate <= 0)
+ * still returns 0 — that's a real, harsh signal, not missing data.
+ */
+function scoreEngagement(engagementRate: number | null, postsPerWeek: number | null): number | null {
+  if (engagementRate === null || engagementRate === undefined) return null;
+  if (engagementRate <= 0) return 0;
   const target = QUALIFICATION.minEngagementRate * 3; // 3x the qualification floor maps to 100
   const base = (engagementRate / target) * 100;
   return Math.round(clamp(base * cadenceFactor(postsPerWeek)));
@@ -128,7 +142,11 @@ async function scoreOne(creator: Creator): Promise<ScoreResult> {
     reachability: Math.round(clamp(llm.reachability)),
   };
 
-  const arithmeticAvg = (breakdown.reach + breakdown.engagement) / 2;
+  // Unmeasured engagement is excluded from the average, not averaged in as a
+  // phantom zero — reach alone stands in for the arithmetic half until real
+  // engagement data exists (e.g. a finder re-run, or a refresh pass).
+  const arithmeticAvg =
+    breakdown.engagement === null ? breakdown.reach : (breakdown.reach + breakdown.engagement) / 2;
   const llmAvg =
     (breakdown.nicheClarity + breakdown.productGap + breakdown.monetisability + breakdown.reachability) / 4;
   const score = Math.round(clamp(arithmeticAvg * 0.5 + llmAvg * 0.5));

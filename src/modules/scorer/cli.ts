@@ -22,8 +22,9 @@ function printResult(ctx: CliContext, result: ScoreResult): void {
   ctx.log.info(
     `@${result.handle} · ${result.score}/100${result.disqualifiedFor ? ` · DISQUALIFIED: ${result.disqualifiedFor}` : ''}`,
   );
+  const engagementLabel = b.engagement === null ? 'unmeasured' : String(b.engagement);
   ctx.log.info(
-    `  reach ${b.reach} · engagement ${b.engagement} · niche ${b.nicheClarity} · gap ${b.productGap} · monetisability ${b.monetisability} · reachability ${b.reachability}`,
+    `  reach ${b.reach} · engagement ${engagementLabel} · niche ${b.nicheClarity} · gap ${b.productGap} · monetisability ${b.monetisability} · reachability ${b.reachability}`,
   );
   ctx.log.info(`  ${result.rationale}`);
 }

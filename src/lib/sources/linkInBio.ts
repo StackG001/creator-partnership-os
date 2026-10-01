@@ -24,6 +24,17 @@ const IGNORED_HOSTS = [
   'amzn.to',
   'apple.com',
   'spotify.com',
+  // Affiliate/retail link shorteners creators paste in their bio — real
+  // links, but never a contact route. Confirmed false positives: a.co
+  // (Amazon) and adbl.co (Audible) both got picked up as "website" and
+  // resolved to a storefront, not a way to reach the creator.
+  'a.co',
+  'adbl.co',
+  'geni.us',
+  'shrsl.com',
+  'liketoknow.it',
+  'ltk.app',
+  'shopmy.us',
 ];
 
 /** Pick the most likely "own site / link hub" URL out of a pile of candidate URLs. */

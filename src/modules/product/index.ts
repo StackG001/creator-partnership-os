@@ -549,16 +549,20 @@ function countPdfPages(pdf: Buffer): number | null {
 }
 
 /** Returns the real page count on success, or null if the render failed (HTML is still available either way). */
-async function renderPdf(html: string, outPath: string, timeoutMs = 30_000): Promise<number | null> {
+async function renderPdf(html: string, outPath: string, timeoutMs = 180_000): Promise<number | null> {
   try {
     const { chromium } = await import('playwright');
     const env = getEnv();
     const browser = await chromium.launch({
+      args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
       ...(env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: env.PLAYWRIGHT_CHROMIUM_PATH } : {}),
     });
     try {
       const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'load', timeout: timeoutMs });
+      // buildHtml() pulls only local/system font stacks and never an <img>
+      // or remote url() — nothing in this page ever hits the network, so
+      // domcontentloaded (skip the network-idle wait) is both safe and faster.
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
       const pdf = await page.pdf({ format: 'A4', printBackground: true });
       await fs.writeFile(outPath, pdf);
       return countPdfPages(pdf);

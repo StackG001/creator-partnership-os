@@ -269,13 +269,17 @@ async function checkChromium(env: Env): Promise<void> {
     const { chromium } = await import('playwright');
     const [bytes, ms] = await timed(async () => {
       const browser = await chromium.launch({
+        args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
         ...(env.PLAYWRIGHT_CHROMIUM_PATH
           ? { executablePath: env.PLAYWRIGHT_CHROMIUM_PATH }
           : {}),
       });
       try {
         const page = await browser.newPage();
-        await page.setContent('<h1>doctor</h1>', { waitUntil: 'load' });
+        // No remote fonts/images in this probe's markup, so domcontentloaded
+        // (no network-idle wait) is enough — and correct even for the real
+        // product template, which is also entirely self-contained.
+        await page.setContent('<h1>doctor</h1>', { waitUntil: 'domcontentloaded', timeout: 180_000 });
         const pdf = await page.pdf({ format: 'A4' });
         const target = path.join(os.tmpdir(), 'cpos-doctor.pdf');
         await fs.writeFile(target, pdf);
@@ -404,15 +408,6 @@ async function checkOptionalApis(env: Env): Promise<void> {
           body: JSON.stringify({ q: 'test', num: 1 }),
         }),
     },
-    {
-      name: 'whop',
-      enabled: Boolean(env.WHOP_API_KEY),
-      reason: 'WHOP_API_KEY not set',
-      run: () =>
-        fetch('https://api.whop.com/api/v5/me', {
-          headers: { Authorization: `Bearer ${env.WHOP_API_KEY}` },
-        }),
-    },
   ];
 
   for (const probe of probes) {
@@ -453,6 +448,74 @@ async function checkOptionalApis(env: Env): Promise<void> {
         fix: 'Could not reach the service — check network access.',
       });
     }
+  }
+}
+
+/**
+ * Whop has no plain "who am I" endpoint that works across key types, so the
+ * probe is a real read: list products for the configured company. Needs both
+ * WHOP_API_KEY and WHOP_COMPANY_ID. On a non-2xx, the response body is shown
+ * (never the key) since Whop's error body is usually more informative than
+ * the status alone.
+ */
+async function checkWhop(env: Env): Promise<void> {
+  if (!env.WHOP_API_KEY) {
+    record({
+      group: 'api',
+      name: 'whop',
+      status: 'skip',
+      detail: 'WHOP_API_KEY not set',
+      fix: 'Optional until the module that needs it is built.',
+    });
+    return;
+  }
+  if (!env.WHOP_COMPANY_ID) {
+    record({
+      group: 'api',
+      name: 'whop',
+      status: 'skip',
+      detail: 'WHOP_COMPANY_ID not set — required to probe /products',
+      fix: 'Set WHOP_COMPANY_ID in .env.',
+    });
+    return;
+  }
+
+  try {
+    const [response, ms] = await timed(() =>
+      fetch(
+        `https://api.whop.com/api/v1/products?company_id=${encodeURIComponent(env.WHOP_COMPANY_ID!)}`,
+        { headers: { Authorization: `Bearer ${env.WHOP_API_KEY}` } },
+      ),
+    );
+
+    if (response.ok) {
+      record(
+        { group: 'api', name: 'whop', status: 'pass', detail: `HTTP ${response.status} ${response.statusText}`.trim() },
+        ms,
+      );
+      return;
+    }
+
+    const body = (await response.text().catch(() => '')).slice(0, 500);
+    const unauthorized = response.status === 401 || response.status === 403;
+    record(
+      {
+        group: 'api',
+        name: 'whop',
+        status: unauthorized ? 'fail' : 'warn',
+        detail: `HTTP ${response.status} ${response.statusText}`.trim(),
+        fix: `${unauthorized ? 'The key was rejected' : 'Reachable but returned a non-2xx status'} — response body: ${body || '(empty)'}`,
+      },
+      ms,
+    );
+  } catch (error) {
+    record({
+      group: 'api',
+      name: 'whop',
+      status: 'fail',
+      detail: errorMessage(error),
+      fix: 'Could not reach the service — check network access.',
+    });
   }
 }
 
@@ -546,6 +609,7 @@ async function main(): Promise<void> {
     } else {
       await checkAnthropic(env);
       await checkOptionalApis(env);
+      await checkWhop(env);
     }
   } else {
     record({

@@ -79,6 +79,22 @@ export const QUALIFICATION = {
   maxFollowers: 200_000,
   /** 0-1. Below this the audience is not engaged enough to buy. */
   minEngagementRate: 0.02,
+  /**
+   * Scorer 0-100 cutoff for the outreach shortlist. Set 2026-09-22 from a
+   * real distribution of 15 genuinely-measured creators (score range 37-72,
+   * post engagement-nullability fix): 65 caught 6-7 of them, 70 caught only
+   * 2 — too thin a sample off one discovery run to commit to the higher bar.
+   * Revisit once more of the pool has real engagement data.
+   */
+  minScore: 65,
+  /**
+   * Scorer's reach sub-score floor (0-100 scale) for anyone inside the
+   * follower window. Set 2026-09-22: the old pure log-scale gave someone
+   * just above minFollowers a reach near 0, which punished meeting the
+   * qualification floor as if it were disqualifying. Clearing 10k is real
+   * credit — 40 is the floor, scaling up to 100 at maxFollowers.
+   */
+  reachFloor: 40,
 } as const;
 
 /** Target shape of the generated PDF. */
