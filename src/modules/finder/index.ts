@@ -356,11 +356,23 @@ function channelUrl(channel: YoutubeChannel): string {
   return `https://www.youtube.com/channel/${channel.channelId}`;
 }
 
+/** A YouTube channel's handle; a custom URL with no Latin characters (e.g. "@トレントン") falls back to the channel id. */
+function youtubeHandle(c: { customUrl?: string | null; channelId: string }): string {
+  if (c.customUrl) {
+    try {
+      return normalizeHandle(c.customUrl);
+    } catch {
+      // fall through to the channel id
+    }
+  }
+  return normalizeHandle(c.channelId);
+}
+
 async function discoverYoutube(source: Source, wantCount: number, newOnly: boolean): Promise<Candidate[]> {
   let channels = await collectYoutubeChannels(source, wantCount);
   if (newOnly) {
-    const known = await knownHandles('YOUTUBE', channels.map((c) => normalizeHandle(c.customUrl || c.channelId)));
-    channels = channels.filter((c) => !known.has(normalizeHandle(c.customUrl || c.channelId)));
+    const known = await knownHandles('YOUTUBE', channels.map((c) => youtubeHandle(c)));
+    channels = channels.filter((c) => !known.has(youtubeHandle(c)));
   }
   const candidates: Candidate[] = [];
 
@@ -370,7 +382,7 @@ async function discoverYoutube(source: Source, wantCount: number, newOnly: boole
       const stats = summarizeYoutube(videos, channel.subscriberCount);
 
       candidates.push({
-        handle: normalizeHandle(channel.customUrl || channel.channelId),
+        handle: youtubeHandle(channel),
         platform: 'YOUTUBE',
         displayName: channel.title,
         profileUrl: channelUrl(channel),

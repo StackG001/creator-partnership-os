@@ -59,6 +59,8 @@ export interface FoundEmail {
   source: string;
 }
 
+const PERSONAL_MAIL = /@(gmail|googlemail|outlook|hotmail|live|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|zoho|fastmail|hey)\.[a-z.]+$/i;
+
 const SHORTENERS = /^(bit\.ly|tinyurl\.com|t\.co|ow\.ly|buff\.ly|rebrand\.ly|cutt\.ly|shorturl\.at|is\.gd|rb\.gy|tiny\.cc|lnkd\.in|goo\.gl)$/i;
 const SITE_PAGES = ['/', '/contact', '/contact-us', '/pages/contact', '/about', '/about-us'];
 
@@ -117,10 +119,10 @@ async function emailFromOwnSite(site: string): Promise<{ sameDomain: FoundEmail 
       const found = emailsOnPage(await fetchPage(url, 15_000));
       const same = found.find((e) => rootDomain(e.split('@')[1] ?? '') === root);
       if (same) return { sameDomain: { email: same, source: `own website ${url}` }, other };
-      if (!other && found.length) {
-        const best = found.find((e) => BUSINESS_HINT.test(e)) ?? found[0]!;
-        other = { email: best, source: `own website ${url}` };
-      }
+      // Off-domain addresses on a site are usually the web host's or a theme's
+      // (support@o2switch.fr) — only a personal mailbox counts as the creator's.
+      const personal = found.filter((e) => PERSONAL_MAIL.test(e));
+      if (!other && personal.length) other = { email: personal[0]!, source: `own website ${url}` };
     } catch {
       // page missing — try the next one
     }

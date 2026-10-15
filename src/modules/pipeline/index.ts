@@ -23,6 +23,8 @@ import {
 } from '../../lib/sources/apify.js';
 import { INSTAGRAM_ACTOR } from '../../lib/sources/instagram.js';
 import { findBusinessEmail } from '../../lib/sources/emailFinder.js';
+import { analyzeMonetization } from '../../lib/sources/productSignals.js';
+import { fetchPage } from '../../lib/sources/linkInBio.js';
 import { instagramDmHandle } from '../../lib/sources/instagramGoogle.js';
 import { QuoteSourceError } from '../../lib/quotes.js';
 import { findCreators } from '../finder/index.js';
@@ -220,6 +222,17 @@ export interface RunDetails {
   stoppedFor?: string;
 }
 
+/** Free fetch of the creator's own website: evidence that it already sells a course/program/product, else null. */
+export async function websiteSellsProduct(url: string | null): Promise<string | null> {
+  if (!url || !/^https?:/i.test(url)) return null;
+  const host = new URL(url).hostname;
+  const byHost = analyzeMonetization('', [url]);
+  if (byHost.hasDigitalProduct) return `website ${host} is a course/storefront platform`;
+  const page = await fetchPage(url, 15_000);
+  const signals = analyzeMonetization(page.text ?? '', page.links);
+  return signals.hasDigitalProduct ? `website ${host}: ${signals.evidence[0] ?? 'product found'}` : null;
+}
+
 async function tryFindEmail(creator: Creator): Promise<string | null> {
   if (creator.businessEmail || creator.contactEmail) return null;
   const raw = (creator.raw ?? {}) as {
@@ -402,6 +415,16 @@ async function runPlatform(platform: PipelinePlatform): Promise<RunDetails & { a
   for (const creator of await prisma.creator.findMany({ where: { ...ours, status: 'AUDITED', messages: { none: live } } })) {
     const l = line(creator);
     l.audited = true;
+    // The audit may have found their own website — if it already sells something, they're out.
+    const sells = await websiteSellsProduct(creator.websiteUrl).catch(() => null);
+    if (sells) {
+      await prisma.creator.update({
+        where: { id: creator.id },
+        data: { status: 'DISQUALIFIED', disqualifiedFor: 'already sells a course/program (website)', hasDigitalProduct: true, productEvidence: [sells] },
+      });
+      l.disqualifiedFor = `already sells a course/program — ${sells}`;
+      continue;
+    }
     if (!creator.businessEmail && !creator.contactEmail) await tryFindEmail(creator).catch(() => null);
     const fresh = (await prisma.creator.findUnique({ where: { id: creator.id } }))!;
     // Email first; otherwise an Instagram DM (a YouTube creator's linked Instagram).
