@@ -153,14 +153,16 @@ export const APIFY = {
 
 /**
  * Instagram audit depth — the paid stage, only for creators who passed the
- * free/cheap stage-1 checks. Profile (1 result) + posts + comments on the
- * posts with the most comments (that's where the audience asks for things).
- * At the Starter-tier $0.0023/result: 1 + 18 + 6×25 = 169 results ≈ $0.39.
+ * free/cheap stage-1 checks. Profile (1 result) + posts + comments on the top 3
+ * posts by comment count (that's where the audience asks for things).
+ * Cut 2026-10-15 from 6×25 comments (169 results ≈ $0.39) to 3×20:
+ * 1 + 18 + 3×20 = 79 results ≈ $0.18 at the Starter-tier $0.0023/result.
+ * Raise commentsPerPost if audits start coming back without a sourced audience quote.
  */
 export const INSTAGRAM_AUDIT = {
   posts: 18,
-  commentPosts: 6,
-  commentsPerPost: 25,
+  commentPosts: 3,
+  commentsPerPost: 20,
 } as const;
 
 /**
@@ -229,10 +231,10 @@ export const LEGACY_NICHES = [
  * terms come from the niche library, not a fixed list.
  */
 export const PIPELINE = {
-  /** Brand-new YouTube creators the pipeline may add per calendar day. */
-  dailyNewCreatorCap: 5,
-  /** YouTube searches per day at most (100 quota units each of the 10,000/day). */
-  youtubeSearchesPerDay: 12,
+  /** Brand-new YouTube creators the pipeline may add per calendar day (free API — raised from 5 on 2026-10-15). */
+  dailyNewCreatorCap: 20,
+  /** YouTube searches per day at most (100 quota units each of the 10,000/day; channel/video lookups use the rest). */
+  youtubeSearchesPerDay: 40,
   /** Variants drafted per message; the auto-sender sends the first that passes every check. */
   outreachVariants: 2,
   /** A search term that adds no new qualified creator this many runs in a row is paused. */
@@ -245,7 +247,7 @@ export const PIPELINE = {
      * the measured averages instead (PipelineRun rows).
      */
     estimate: {
-      /** Gerald's planning number for one paid audit. The formula from INSTAGRAM_AUDIT is reported alongside. */
+      /** Gerald's original planning number for one audit — what the 3-run report compares against. Sizing uses the INSTAGRAM_AUDIT formula until runs are measured. */
       auditUsd: 0.36,
       /** Stage-1 profiles checked per creator who qualifies (a guess until measured). */
       profilesPerQualified: 20,

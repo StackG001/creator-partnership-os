@@ -203,7 +203,7 @@ Plan, monthly limit, cycle dates and usage are **read live** from
   (`src/lib/sources/apify.ts`); never call Apify any other way.
 - **Run size grows, runs don't multiply:** audits per run = ceiling ÷ cost of
   one qualified creator (audit + stage-1 profiles). Unspent budget raises the
-  next day's ceiling. Cost basis: the $0.36/audit estimate until 3 live runs,
+  next day's ceiling. Cost basis: the `INSTAGRAM_AUDIT` result count × price until 3 live runs,
   then measured averages (`PipelineRun`). After the 3rd live run the daily
   summary reports real cost per run vs $0.36 and per qualified creator.
 - **Two stages.** Stage 1 is profile-only (followers, bio, link-in-bio, latest
@@ -211,7 +211,11 @@ Plan, monthly limit, cycle dates and usage are **read live** from
   anyone outside 10k–200k, brands/businesses (`IG_BRAND_CATEGORIES`), coaches
   selling services, and anyone whose bio or link-in-bio already sells a
   course/ebook/guide/paid product. Only survivors get the paid stage-2 audit:
-  posts + comments on the **most-commented posts only** (`INSTAGRAM_AUDIT`).
+  posts + comments from the **top 3 posts by comment count, 20 comments each**
+  (`INSTAGRAM_AUDIT`, ≈ $0.18/audit since 2026-10-15; was 6×25 ≈ $0.39). Raise
+  `commentsPerPost` only if audits stop finding a sourced audience quote.
+- **YouTube is free:** up to 20 new creators/day (`PIPELINE.dailyNewCreatorCap`)
+  across the niche library, same 70/30 split.
 - **Never re-scrape a handle.** `SeenHandle` + `Creator` are checked before any
   paid call, across every search and niche.
 - Before changing Instagram scope or schedule, show Gerald

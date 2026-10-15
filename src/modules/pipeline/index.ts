@@ -30,6 +30,7 @@ import { auditCreator } from '../audit/index.js';
 import {
   autoSendEmails,
   draftOutreach,
+  MANUAL_HOLD,
   listFollowUpsDue,
   SEQUENCE_DESIGN_SINCE,
 } from '../outreach/index.js';
@@ -140,9 +141,10 @@ export async function sizeInstagramRun(): Promise<InstagramSizing> {
     take: 10,
   });
   const auditFormulaUsd = INSTAGRAM_AUDIT_RESULTS * price;
-  let auditUsd: number = PIPELINE.instagram.estimate.auditUsd;
+  // Until runs are measured, an audit costs what INSTAGRAM_AUDIT's result count says.
+  let auditUsd: number = auditFormulaUsd;
   let profilesPerQualified: number = PIPELINE.instagram.estimate.profilesPerQualified;
-  let basis = `estimate ($${auditUsd} per audit, ${profilesPerQualified} profiles checked per qualified creator)`;
+  let basis = `INSTAGRAM_AUDIT formula ($${auditUsd.toFixed(3)} per audit = ${INSTAGRAM_AUDIT_RESULTS} results) and ${profilesPerQualified} profiles checked per qualified creator (estimate)`;
   if (measured.length >= PIPELINE.instagram.measuredRunsBeforeResize) {
     const d = (r: (typeof measured)[number]) => (r.details ?? {}) as { auditSpentMicros?: number };
     const audits = measured.reduce((n, r) => n + r.audits, 0);
@@ -502,7 +504,10 @@ export interface DailyPartResult {
   summaryPath: string;
 }
 
-export async function runDailyPart(part: DailyPart, options: { force?: boolean } = {}): Promise<DailyPartResult | { skipped: string }> {
+export async function runDailyPart(
+  part: DailyPart,
+  options: { force?: boolean; noSend?: boolean } = {},
+): Promise<DailyPartResult | { skipped: string }> {
   const state = await readState();
   const day = today();
   const key = `last_${part}`;
@@ -532,7 +537,17 @@ export async function runDailyPart(part: DailyPart, options: { force?: boolean }
   const followUps = await draftDueFollowUps(false);
   const dir = path.join(outputsRoot(), '_pipeline');
   await fs.mkdir(dir, { recursive: true });
-  const send = AUTO_SEND.enabled ? await autoSendEmails({ max: AUTO_SEND.maxEmailsPerDay, logPath: path.join(dir, 'sends.jsonl') }) : null;
+  // --no-send: nothing goes out, and every pending draft gets a MANUAL HOLD that only approval lifts.
+  if (options.noSend) {
+    await prisma.outreachMessage.updateMany({
+      where: { status: 'DRAFT', OR: [{ heldFor: null }, { NOT: { heldFor: { startsWith: MANUAL_HOLD } } }] },
+      data: { heldFor: `${MANUAL_HOLD}: first live run (${day}) — waiting for Gerald to approve (npm run outreach -- --approve <id>)` },
+    });
+  }
+  const send =
+    AUTO_SEND.enabled && !options.noSend
+      ? await autoSendEmails({ max: AUTO_SEND.maxEmailsPerDay, logPath: path.join(dir, 'sends.jsonl') })
+      : null;
 
   await prisma.pipelineRun.update({
     where: { id: run.id },
@@ -610,7 +625,7 @@ export async function renderDailySummary(day: string): Promise<string> {
     include: { creator: { select: { handle: true } } },
   });
   const held = await prisma.outreachMessage.findMany({
-    where: { channel: 'EMAIL', status: 'DRAFT', heldFor: { not: null } },
+    where: { status: 'DRAFT', heldFor: { not: null } },
     include: { creator: { select: { handle: true } } },
     orderBy: { createdAt: 'asc' },
   });

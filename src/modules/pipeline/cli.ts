@@ -16,6 +16,7 @@ export const spec: CliSpec = {
     daily: { type: 'boolean', description: 'Run one daily part (needs --part). Each part runs once a day.' },
     part: { type: 'string', description: 'youtube | instagram.' },
     force: { type: 'boolean', description: 'With --daily: run even if this part already ran today.' },
+    'no-send': { type: 'boolean', description: 'With --daily: send nothing; every draft gets a MANUAL HOLD that only approving it lifts.' },
     summary: { type: 'boolean', description: 'Print today\'s summary from the database.' },
   },
 };
@@ -33,7 +34,7 @@ await runCli(spec, async (ctx) => {
   if (!ctx.flags.daily) throw new Error('pass --daily --part youtube|instagram, --dry-run, or --summary.');
   const part = String(ctx.flags.part ?? '').toLowerCase();
   if (part !== 'youtube' && part !== 'instagram') throw new Error('--part must be youtube or instagram.');
-  const result = await runDailyPart(part as DailyPart, { force: Boolean(ctx.flags.force) });
+  const result = await runDailyPart(part as DailyPart, { force: Boolean(ctx.flags.force), noSend: Boolean(ctx.flags['no-send']) });
   if ('skipped' in result) {
     ctx.log.info(result.skipped);
     return;

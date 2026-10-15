@@ -664,9 +664,10 @@ export async function approveOutreachMessage(messageId: string): Promise<Approve
   assertContactable(message.creator, 'approving');
   await assertClearForOutreach(message.creator, 'approving', { quoteFree: isQuoteFreeClosingNote(message) });
 
+  // Approving is Gerald's decision, so it also lifts any hold.
   const updated = await prisma.outreachMessage.update({
     where: { id: messageId },
-    data: { status: 'APPROVED' },
+    data: { status: 'APPROVED', heldFor: null },
   });
 
   return {
@@ -781,6 +782,9 @@ export async function sendOutreachMessage(
 // below passes. Anything that fails is held for Gerald (heldFor) — never sent,
 // never rewritten around.
 
+/** heldFor prefix for a hold only Gerald can lift (by approving the message). The auto-sender never sends or overwrites it. */
+export const MANUAL_HOLD = 'MANUAL HOLD';
+
 /** Drafts written before the current sequence design are never auto-sent. */
 export const SEQUENCE_DESIGN_SINCE = new Date('2026-10-15T00:00:00');
 
@@ -826,6 +830,7 @@ export async function sendChecks(message: MessageWithCreator): Promise<string[]>
   const { creator } = message;
   const block = contactBlock(creator);
   if (block) problems.push(block);
+  if (message.heldFor?.startsWith(MANUAL_HOLD)) problems.push(message.heldFor);
   if (message.channel !== 'EMAIL') problems.push(`channel ${message.channel} — DMs go out by hand`);
   if (!message.to) problems.push('no recipient address');
   if (message.createdAt < SEQUENCE_DESIGN_SINCE) problems.push('drafted under the old sequence design — redraft it');
@@ -915,7 +920,7 @@ export async function autoSendEmails(options: { max: number; dryRun?: boolean; l
       out.held.push({ handle: first.creator.handle, id: first.id, sequence: first.sequence, reasons });
       if (!options.dryRun) {
         await prisma.outreachMessage.updateMany({
-          where: { id: { in: variants.map((v) => v.id) } },
+          where: { id: { in: variants.filter((v) => !v.heldFor?.startsWith(MANUAL_HOLD)).map((v) => v.id) } },
           data: { heldFor: reasons.join(' | ').slice(0, 2000) },
         });
       }
