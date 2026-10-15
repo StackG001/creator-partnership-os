@@ -28,7 +28,7 @@ npm run doctor                # verify everything before you run a module
 the Node version, `.env`, every environment variable, the SQLite database and
 its tables, the `outputs/` directory, Chromium's ability to render a PDF, and
 every API you hold a key for (all three Anthropic models, YouTube, Apify,
-Brave/Serper, Whop). It exits non-zero if anything required is broken and
+Serper, Whop). It exits non-zero if anything required is broken and
 prints the exact fix under **next steps**.
 
 ### Adding your API keys
@@ -123,6 +123,7 @@ npm run brand -- --handle jamesclearcoffee --refresh
 npm run outreach -- --handle jamesclearcoffee --channel email
 npm run outreach -- --handle jamesclearcoffee --channel ig_dm --variants 3
 npm run outreach -- --handle jamesclearcoffee --sequence 2
+npm run quotes                      # check every creator for unsourced quotes before outreach
 
 # 6. research, write and render the 35-50 page PDF
 npm run product -- --handle jamesclearcoffee --angle 1

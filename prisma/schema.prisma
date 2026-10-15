@@ -36,6 +36,16 @@ model Source {
   runCount      Int       @default(0)
   foundCount    Int       @default(0)
   qualifiedCount Int      @default(0)
+  // pipeline pauses a search term after PIPELINE.pauseAfterEmptyRuns runs in a
+  // row that added no new qualified creator; clear pausedAt to resume it
+  consecutiveEmptyRuns Int       @default(0)
+  pausedAt             DateTime?
+  pausedReason         String?
+  // what this term has cost on Apify (discovery + audits of creators it found), in
+  // micro-dollars (1e-6 USD) — Apify bills fractions of a cent, so cents would round to 0
+  spentMicros          Int       @default(0)
+  nicheId              String?
+  nicheRef             Niche?    @relation(fields: [nicheId], references: [id], onDelete: SetNull)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -80,6 +90,10 @@ model Creator {
   monetization      Json? // { sponsorships, affiliate, merch, coaching, patreon }
 
   // contact
+  emailSource   String? // where businessEmail was found: "bio" | "link-in-bio <url>" | "youtube channel description" | "audit"
+  // set when a product idea for a health/medical/mental-health/finance creator crosses
+  // from a lifestyle/experience guide into treatment, cure, diagnosis, investment or debt advice
+  productFlag   String?
   contactEmail  String?
   contactMethod String? // ContactMethod: EMAIL | IG_DM | YT_ABOUT | WEBSITE_FORM | MANAGER
   contactNotes  String?
@@ -107,10 +121,16 @@ model Creator {
   outputDir       String? // outputs/<handle>
   raw             Json? // untouched payload from the discovery source
 
+  // set when something about this creator needs a human before more outreach
+  // (e.g. a quote with no source URL) — drafting/approving/sending refuse while set
+  reviewFlag      String?
+  reviewFlaggedAt DateTime?
+
   sourceId String?
   source   Source? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
 
   audits   Audit[]
+  quotes   Quote[]
   products Product[]
   messages OutreachMessage[]
   launches Launch[]
@@ -156,6 +176,33 @@ model Audit {
   updatedAt DateTime @updatedAt
 
   @@index([creatorId, createdAt])
+}
+
+/// One word-for-word quote from a creator's content, with where it came from.
+/// Only a quote with a source URL, a known author and a found date may be used
+/// in a draft (src/lib/quotes.ts) — the URL-less rows here are legacy hand-seeded
+/// quotes waiting for a link, and they block drafting until fixed or dropped.
+model Quote {
+  id        String  @id @default(cuid())
+  creatorId String
+  creator   Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  text         String // word for word; if trimmed, exactly the excerpt kept
+  isTrimmed    Boolean @default(false) // true = text is an excerpt, never present it as the full comment
+  fullText     String? // the full caption/comment, when known
+  sourceUrl    String? // the post/video URL — required for use in any draft
+  authorType   String? // QuoteAuthor: CREATOR_CAPTION | FOLLOWER_COMMENT
+  authorHandle String? // the follower's handle/name when authorType = FOLLOWER_COMMENT
+  foundAt      DateTime? // when the quote was found
+  origin       String // QuoteOrigin: APIFY_AUDIT | YOUTUBE_AUDIT | CHROME_RESEARCH | MANUAL | LEGACY_SEED
+  pain         String? // what the quote shows, paraphrased — never stored in text
+  auditId      String?
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([creatorId])
 }
 
 /// The 35-50 page PDF built in the creator's voice, plus everything that went
@@ -222,7 +269,8 @@ model OutreachMessage {
   body     String
   hooks    Json? // the personalisation the message leans on, for later analysis
 
-  status     String    @default("DRAFT") // OutreachStatus: DRAFT | APPROVED | SENT | REPLIED | BOUNCED | IGNORED | DECLINED
+  status     String    @default("DRAFT") // OutreachStatus: DRAFT | APPROVED | SENT | REPLIED | BOUNCED | IGNORED | DECLINED | SUPERSEDED
+  heldFor    String? // why the auto-sender held this message for a human (null = not held)
   sentAt     DateTime?
   repliedAt  DateTime?
   replyBody  String?
@@ -280,4 +328,68 @@ model Launch {
 
   @@index([status, launchedAt])
   @@index([creatorId])
+}
+
+/// Every handle the finder has already paid to look at, kept or not, so no
+/// search or niche ever pays to scrape the same profile twice.
+model SeenHandle {
+  id       String   @id @default(cuid())
+  platform String // Platform: INSTAGRAM | YOUTUBE
+  handle   String // normalised, lowercase, no leading @
+  outcome  String // KEPT | REJECTED
+  reason   String?
+  sourceId String?
+  seenAt   DateTime @default(now())
+
+  @@unique([platform, handle])
+}
+
+/// The niche library. Grows every week (src/modules/niches): niches and
+/// sub-niches from problem hashtags, "how do I…" phrases, conditions, life
+/// situations, hobbies, and the similar-accounts lists of qualified creators.
+/// Each niche owns search Sources; the pipeline promotes niches that produce,
+/// pauses dead terms and retires niches that stay dead.
+model Niche {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  category  String // broad area: cooking, budgeting, parenting, health conditions…
+  parentId  String?
+  origin    String // NicheOrigin: SEED | GENERATED | SIMILAR_ACCOUNTS | PROVEN | LEGACY
+  // health / medical / mental health / finance: products must be lifestyle or
+  // experience guides from the creator's own routines — never treatment, cures,
+  // diagnosis, investment or debt advice
+  sensitive Boolean @default(false)
+  status    String  @default("EXPLORING") // NicheStatus: EXPLORING | PRODUCING | RETIRED
+  notes     String?
+
+  runs        Int       @default(0)
+  qualified   Int       @default(0)
+  emptyRuns   Int       @default(0) // consecutive runs with no new qualified creator
+  spentMicros Int       @default(0)
+  lastRunAt   DateTime?
+  promotedAt  DateTime?
+  retiredAt   DateTime?
+
+  sources   Source[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, lastRunAt])
+}
+
+/// One pipeline run (one platform part of a day), for cost tracking and the daily summary.
+model PipelineRun {
+  id          String   @id @default(cuid())
+  platform    String // YOUTUBE | INSTAGRAM
+  day         String // YYYY-MM-DD, local
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  budgetMicros Int     @default(0) // Instagram: this run's hard ceiling
+  spentMicros Int      @default(0)
+  profilesChecked Int  @default(0)
+  added       Int      @default(0) // new qualified creators kept
+  audits      Int      @default(0)
+  details     Json? // searches, creators, niche events — what the summary renders
+
+  @@index([platform, day])
 }

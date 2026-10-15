@@ -42,7 +42,7 @@ const PRODUCT_KEYWORDS =
 const SPONSOR_RE = /\b(sponsored|paid partnership|in partnership with|#ad\b)\b/i;
 const AFFILIATE_RE = /\b(affiliate|use code|discount code|promo code|my code)\b/i;
 const MERCH_RE = /\bmerch\b/i;
-const COACHING_RE = /\bcoach(ing)?\b/i;
+const COACHING_RE = /\b(coach(ing)?|book a (call|session|consult\w*)|1:1 (sessions?|calls?|support)|consultations?|work with me|accepting (new )?clients|services? (menu|available)|dm (me )?for (services|rates|pricing))\b/i;
 const PATREON_RE = /\bpatreon\b/i;
 
 function matchingHosts(urls: string[]): string[] {

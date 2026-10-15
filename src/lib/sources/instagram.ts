@@ -1,4 +1,4 @@
-import { getEnv } from '../env.js';
+import { runActorGuarded } from './apify.js';
 import { createLogger } from '../logger.js';
 
 /**
@@ -8,7 +8,8 @@ import { createLogger } from '../logger.js';
  */
 
 const log = createLogger('sources:instagram');
-const ACTOR = 'apify~instagram-scraper';
+export const INSTAGRAM_ACTOR = 'apify~instagram-scraper';
+const ACTOR = INSTAGRAM_ACTOR;
 
 export interface InstagramProfile {
   username: string;
@@ -22,6 +23,8 @@ export interface InstagramProfile {
   verified: boolean;
   profilePicUrl: string;
   businessCategoryName: string | null;
+  /** The ~12 most recent posts the details result carries — enough to measure engagement without a separate posts run. */
+  latestPosts: InstagramPost[];
 }
 
 export interface InstagramPost {
@@ -47,33 +50,10 @@ export interface InstagramComment {
   timestamp: string;
 }
 
+/** Every call goes through the Apify spending guard (src/lib/sources/apify.ts). */
 async function runActor<T>(input: Record<string, unknown>): Promise<T[]> {
-  const env = getEnv();
-  if (!env.APIFY_TOKEN) {
-    throw new Error('APIFY_TOKEN is not set — required to fetch Instagram data.');
-  }
-
   const started = Date.now();
-  const res = await fetch(
-    `https://api.apify.com/v2/acts/${ACTOR}/run-sync-get-dataset-items`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.APIFY_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(input),
-    },
-  );
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(
-      `Apify instagram-scraper failed: HTTP ${res.status} ${res.statusText} ${body.slice(0, 500)}`,
-    );
-  }
-
-  const items = (await res.json()) as T[];
+  const items = await runActorGuarded<T>(ACTOR, input, `instagram ${String(input.resultsType)}`);
   log.debug(`${input.resultsType} · ${items.length} item(s) · ${Date.now() - started}ms`);
   return items;
 }
@@ -101,6 +81,11 @@ function toProfile(item: Record<string, unknown>, fallbackUsername: string): Ins
     verified: Boolean(item.verified),
     profilePicUrl: String(item.profilePicUrlHD ?? item.profilePicUrl ?? ''),
     businessCategoryName: (item.businessCategoryName as string | null) ?? null,
+    latestPosts: Array.isArray(item.latestPosts)
+      ? (item.latestPosts as Record<string, unknown>[])
+          .filter((p) => typeof p.id === 'string')
+          .map((p) => toPost(p, String(item.username ?? fallbackUsername)))
+      : [],
   };
 }
 

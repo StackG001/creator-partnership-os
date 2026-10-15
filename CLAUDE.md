@@ -19,6 +19,83 @@ An internal tool for Gerald. End to end:
 5. Generate a **sales funnel**: sales page + order bump + upsell.
 6. **Publish on Whop** with revenue share, and **log the results**.
 
+## Core principle (permanent — every session)
+
+The whole system is built on **mining creators' comment sections for gold**:
+find creators in any niche, then go through their audience's comments to pull
+out as many real, untapped product opportunities as possible (pain points,
+repeated questions, "please teach this", "where's the recipe"…).
+
+- Every opportunity is recorded with **the comment, the post it's on, and the
+  creator** (plus who wrote it and when) — that's the `Quote` table, see
+  "Quote sourcing" below.
+- **The first outreach message, on every channel, always tells the creator the
+  opportunity is already there** (their audience is asking for it) **and that
+  we have the technical ability to do all the work** — so they never worry
+  about it and just focus on creating content to promote the product.
+
+## Outreach sequence design (permanent)
+
+Prompts in `src/modules/outreach/index.ts`; every rule below is also checked
+in code before anything can send (`sendChecks`, `npm run outreach -- --check <id>`).
+
+- **Seq 1 — state the goal plainly.** Their audience is already asking for a
+  product: quote one sourced audience comment word for word (the one that
+  most clearly shows demand) + the BRIDGE line ("bet you get some version of
+  that every time you post"). We build the whole thing — research, writing,
+  design, sales page, setup — and they only make content to promote it,
+  keeping 50% of every sale. Ends with one yes/no question.
+- **Seq 2 — add something new, never repeat seq 1.** A second sourced audience
+  quote (it only gets quotes seq 1 didn't use) and/or a concrete product idea
+  specific to their content (working title + the 3-4 things it would cover),
+  plus a short answer to the most likely objection ("I don't have time" → you
+  don't build anything; "my audience won't pay" → point to the comments
+  asking for it). One yes/no question.
+- **Seq 3 — the close.** The honest cost of waiting (their audience keeps
+  asking; if they don't answer it, someone else may), the easiest possible ask
+  ("Reply 'yes' and I'll send the outline"), and the body says plainly it's the
+  last message. Quotes no one.
+- **Always honest:** no fake deadlines, no invented scarcity, no "other
+  creators already said yes" unless true and on record, no guilt-tripping
+  (`DISHONEST` rejects these at draft time and at send time).
+- **Existing rules still apply:** sourced quotes only, word for word (any
+  quote mark — "", “”, «» — counts); never claim work already exists
+  (`BANNED_CLAIMS`); count the notes correctly; real first names only, taken
+  from the display name's name part, never from a handle; sign-off appended
+  in code. Same order and length budget on DMs, just shorter.
+- **Names:** the first name comes from the name part of the display name
+  (before any emoji, "|", tagline; letter-spaced names are joined). Never from
+  a handle, a comment or a guess. **No real first name → open with "Hi there,".**
+- A comment the creator wrote themself (their own reply) is their words, not
+  the audience's — stored as `CREATOR_CAPTION`, never as a follower comment.
+
+## Niches: no limits (permanent)
+
+We are not limited to any niche — anywhere creators teach, show or struggle
+with something and their audience asks questions. The **niche library**
+(`Niche` table, `src/modules/niches`, `npm run niches`) holds every niche and
+its search terms (YouTube keyword + "how do I…" phrase, Instagram keyword +
+problem hashtag, and a SIMILAR_TO search for every Instagram creator who
+qualified).
+
+- **Weekly** the 09:00 run generates `NICHE_LIBRARY.newNichesPerWeek` new
+  niches/sub-niches (~⅓ neighbours of what already produced, the rest new
+  territory across `NICHE_LIBRARY.categories` and beyond).
+- **Every run** splits searches ~70% exploit (niches/terms that produced) /
+  ~30% explore (never-run niches first, one term per niche). No term runs more
+  than once in `rotationDays` (7).
+- **Tracked per niche and per term:** runs, qualified creators, Apify spend
+  (micro-dollars), cost per qualified. A niche is **promoted** (PRODUCING) on its
+  first qualified creator, a term is **paused** after 2 empty runs, a niche is
+  **retired** after 3 empty runs (its terms paused). All reported daily.
+- **Sensitive niches** (health, medical, mental health, finance) are allowed,
+  but product ideas must be lifestyle/experience guides from the creator's own
+  routines ("my flare-day meal plan", "how I budget on one income") — never
+  treatment, cures, diagnosis, investment or debt advice. `src/lib/productLine.ts`
+  holds the rule (given to the audit and outreach prompts) and the checks:
+  ideas that cross the line set `Creator.productFlag`; a message that crosses
+  it is held, never auto-sent.
+
 ## Stack constraints (non-negotiable)
 
 - Next.js, TypeScript, App Router.
@@ -35,7 +112,7 @@ any UI. A module is not done until its CLI works. `src/lib/cli.ts` gives each
 one flag parsing, generated `--help`, env validation and exit codes — use
 `runCli(spec, handler)`, don't hand-roll argv parsing.
 
-**Module layout.** `src/modules/{finder,scorer,audit,outreach,product,brand,funnel,publisher}/`
+**Module layout.** `src/modules/{finder,scorer,audit,outreach,product,brand,funnel,publisher,pipeline}/`
 with `cli.ts` (entry point + flags), `index.ts` (the typed functions, no argv
 knowledge) and `README.md`. CLI parses, `index.ts` does the work.
 
@@ -58,6 +135,92 @@ file on disk.
 
 **Nothing external happens implicitly.** Outreach messages stay `DRAFT` until a
 human approves them; the publisher supports `--dry-run` and prints its payload.
+
+## Quote sourcing (permanent rule — every session)
+
+Enforced in code by `src/lib/quotes.ts`; the `quotes` module is the only way
+to save, fix or drop a quote (`npm run quotes -- --help`).
+
+- **Every quote saved for a creator stores its source:** the post URL, who
+  wrote it (the creator's own caption, or a named follower's comment — their
+  handle), and the date it was found. These live on the `Quote` table.
+- **No source URL → not usable.** A quote without a URL (or author, or date)
+  can't be used in any draft. Drafting, `--approve` and `--send` refuse and
+  set `Creator.reviewFlag` instead of writing around it. Never work around a
+  refusal — get the link, or drop the quote. The one exception: a seq-3+
+  closing note with nothing in quotation marks quotes no one, so it can be
+  drafted, approved and sent while the flag stands (it gets no quotes or audit
+  evidence, and its schema rejects any quotation).
+- **Word for word.** Quotes are copied exactly. A trimmed quote is stored as
+  trimmed (`isTrimmed`, with `fullText` when known) and drafts must show the
+  cut with "…" — never present an excerpt as the full comment. Drafts may only
+  put text in quotation marks if it comes from one of the creator's sourced
+  quotes; the draft schema rejects anything else.
+- **Applies to every source:** Apify/YouTube audits (quotes are traced to
+  their post automatically, untraceable ones are dropped), Claude in Chrome
+  research Gerald pastes in (`--origin chrome`), and creators added by hand.
+  **If Gerald pastes a quote without a link, ask him for the link before
+  saving it** — `quotes --add` refuses without `--url` anyway.
+- **Never write placeholder text into a creator's real fields** (bio,
+  displayName, niche, emails…) — no "Recent audience comment: …", "[Name]",
+  TODO. Analysis/vetting notes go in `contactNotes`; quotes go in `Quote`.
+  `npm run quotes` flags any placeholder it finds.
+- Run `npm run quotes` (no flags) before any outreach batch: it re-checks
+  every creator and lists the ones flagged for review.
+
+## Apify spending (Instagram)
+
+Plan, monthly limit, cycle dates and usage are **read live** from
+`GET /v2/users/me/limits` — never ask Gerald, never hard-code them. As of
+2026-10-15: Starter, $19/month, cycle resets on the 15th, $0.0023/result for
+`apify~instagram-scraper`.
+
+- Instagram may use **80% of the plan's monthly limit**
+  (`APIFY.instagramShareOfPlan`), spread evenly over the Instagram run days
+  left in the cycle (daily) — each run's share is its **hard ceiling**. No single
+  actor run over `APIFY.maxRunUsd` ($1). Real usage is re-checked before every
+  paid call. Every actor call goes through `runActorGuarded`
+  (`src/lib/sources/apify.ts`); never call Apify any other way.
+- **Run size grows, runs don't multiply:** audits per run = ceiling ÷ cost of
+  one qualified creator (audit + stage-1 profiles). Unspent budget raises the
+  next day's ceiling. Cost basis: the $0.36/audit estimate until 3 live runs,
+  then measured averages (`PipelineRun`). After the 3rd live run the daily
+  summary reports real cost per run vs $0.36 and per qualified creator.
+- **Two stages.** Stage 1 is profile-only (followers, bio, link-in-bio, latest
+  posts; ~1 result per profile) plus a free fetch of the link-in-bio page. Drop
+  anyone outside 10k–200k, brands/businesses (`IG_BRAND_CATEGORIES`), coaches
+  selling services, and anyone whose bio or link-in-bio already sells a
+  course/ebook/guide/paid product. Only survivors get the paid stage-2 audit:
+  posts + comments on the **most-commented posts only** (`INSTAGRAM_AUDIT`).
+- **Never re-scrape a handle.** `SeenHandle` + `Creator` are checked before any
+  paid call, across every search and niche.
+- Before changing Instagram scope or schedule, show Gerald
+  `npm run pipeline -- --dry-run` first.
+
+## Daily automation
+
+Cron (after Gerald's OK): **09:00** `npm run pipeline -- --daily --part youtube`
+(weekly niche generation, YouTube discovery — free), **10:00**
+`npm run pipeline -- --daily --part instagram`. Each part: niche-library
+searches → score → **find a business email** for everyone who passed scoring
+(bio → link-in-bio page / Linktree / Beacons / Stan / personal site → YouTube
+descriptions; free fetches; stored with `emailSource`) → audit → draft seq 1
+(**email whenever one exists**, DM otherwise); retire drafts for messages
+already sent; draft seq 2/3 for everyone due (switching to email if one has
+been found); then — only while `AUTO_SEND.enabled` — send EMAIL drafts that
+pass every `sendChecks` check, max 15/day, Resend ids on the message and in
+`outputs/_pipeline/sends.jsonl`. Anything failing is held (`heldFor`) with the reason.
+
+**DMs are never sent automatically.** `npm run dm-queue` serves the DM queue
+page (phone + laptop, token in the URL): approved unsent DMs oldest first,
+"Copy & open" (Instagram `https://ig.me/m/<handle>`, YouTube About page, X
+profile), "Sent" (marks SENT now → follow-up clock starts), "Skip". Drafts
+needing a variant picked are listed with "Approve".
+
+Daily summary → `outputs/_pipeline/latest.md` (rebuilt from the database
+after each part): new creators by niche, Apify today/cycle, cost per qualified
+creator, niches promoted/paused/retired, new niches tried, emails sent, held +
+why, DMs waiting (queue link), replies logged.
 
 ## Commands
 

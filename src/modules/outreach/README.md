@@ -1,25 +1,38 @@
 # outreach
 
-Personalised outreach drafted from the audit, never from a template — but
-sequences 1-2 follow one fixed structure: the iClipmedia framework (Iman
-Gadzhi method). This is the only style used for those two touches, no
-exceptions:
+Personalised outreach drafted from the audit, never from a template, in a
+fixed three-message sequence (full design in CLAUDE.md, "Outreach sequence
+design"):
 
-1. **HOOK** — one specific, real thing from their content (a comment quote, a
-   caption line, a video title). Never generic.
-2. **VALUE LINE** — one sentence on what gets built and the split (50%).
-3. **ZERO EFFORT LINE** — no filming, writing or design work from them.
-4. **PROOF OF WORK** — a line showing something's already been started.
-5. **SINGLE ASK** — one yes/no question, nothing else.
+1. **Seq 1 — the goal, plainly.** A sourced audience comment word for word +
+   the BRIDGE line (it speaks for the whole audience) → we build the whole
+   thing (research, writing, design, sales page, setup) → they only make
+   content to promote it and keep 50% of every sale → one yes/no question.
+2. **Seq 2 — something new.** A second sourced quote (only quotes seq 1
+   didn't use) and/or a concrete product idea (title + 3-4 things it would
+   cover), plus a short answer to the likeliest objection. One yes/no question.
+3. **Seq 3 — the close.** Honest cost of waiting, "Reply 'yes' and I'll send
+   the outline", plainly the last message. Quotes no one.
 
-Email/YT-about/manual messages carry all five parts, capped at 120 words. DMs
-(IG/X) collapse to HOOK + ASK only, capped at 60 words — the offer only comes
-out once they reply.
+Greeting: the creator's real first name from their display name — never from
+a handle — or "Hi there," when there isn't one. In health/medical/mental-health/
+finance niches the product is always pitched as a lifestyle/experience guide
+(`src/lib/productLine.ts`); a message that crosses into treatment/advice is held.
 
-**Sequence 3 onward is a different, deliberately un-pitchy shape**: a short
-closing note, under 40 words, that explicitly acknowledges it's a repeat
-touch, never re-pitches or introduces new evidence, and leaves the door open
-with zero pressure.
+Emails ≤120/130/60 words; DMs (IG/X) the same beats in ≤75/75/45 words.
+Honesty is enforced (`DISHONEST`): no fake deadlines, invented scarcity,
+invented social proof or guilt.
+
+`--preview` drafts the whole sequence for a creator without saving anything:
+
+```
+npm run outreach -- --handle chefagathe --channel email --preview --variants 1
+```
+
+`--check <id>` runs every auto-send check on a message (`sendChecks`):
+sourced word-for-word quotes, real first name from the display name, correct
+note count, sign-off present, honesty, no claims of existing work, recipient
+present, due, and drafted under the current design.
 
 Framework messages sign off as:
 
@@ -27,6 +40,22 @@ Framework messages sign off as:
 Gerald
 Gerald Ebere Ozokwelu | iClipmedia | gerald@iclipmedia.com
 ```
+
+For every non-DM channel the sign-off is appended in code (`withSignOff`),
+not left to the model — any sign-off the model writes anyway is stripped
+first, so it never appears twice. DMs keep the model-written sign-off.
+
+Every draft body is also checked for claims that work already exists
+("already drafted/sketched", "I've put together", "send it over", "send the
+outline"…, see `BANNED_CLAIMS`). A hit fails schema validation, so
+`completeJSON` sends the draft back to the model to rewrite, up to
+`LLM_MAX_RETRIES` times, then the run errors instead of saving it.
+
+Quotes come only from the creator's sourced `Quote` rows (see CLAUDE.md,
+"Quote sourcing"). If any of their quotes has no source URL/author/date,
+drafting, `--approve` and `--send` all refuse and flag the creator for review
+— run `npm run quotes` to see and fix them. Anything a draft puts in quotation
+marks must be word for word from a sourced quote, with "…" for a cut.
 
 Every message stays `DRAFT` until a human approves it — sending is a separate,
 deliberate step. Artifacts land in `outputs/<handle>/outreach/`.

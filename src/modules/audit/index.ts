@@ -12,6 +12,7 @@ import {
 } from '../../lib/paths.js';
 import { extractUrls, fetchPage, pickLinkInBioUrl } from '../../lib/sources/linkInBio.js';
 import { resolveSocialLinks, type SocialLinks } from '../../lib/sources/socialLinks.js';
+import { isSensitiveNiche, productLineFlags, SENSITIVE_PRODUCT_RULE } from '../../lib/productLine.js';
 import {
   fetchInstagramComments,
   fetchInstagramPosts,
@@ -26,6 +27,8 @@ import {
   type YoutubeComment,
 } from '../../lib/sources/youtube.js';
 import { createLogger } from '../../lib/logger.js';
+import { INSTAGRAM_AUDIT } from '../../lib/constants.js';
+import { originForPlatform, refreshReviewFlag, resolveAuditQuotes, saveQuote } from '../../lib/quotes.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -191,12 +194,16 @@ async function fetchInstagramSource(username: string, postCount: number) {
     profilePicUrl: profileRaw.profilePicUrl,
   };
 
-  const fetchComments = async (top: UnifiedPost[]): Promise<UnifiedComment[]> => {
+  const fetchComments = async (_top: UnifiedPost[]): Promise<UnifiedComment[]> => {
+    // Comments are the expensive part of an Instagram audit — sized by
+    // INSTAGRAM_AUDIT, and only on the posts with the most comments: that's
+    // where the audience asks for things.
+    const byComments = [...unified].sort((a, b) => b.commentCount - a.commentCount).filter((p) => p.commentCount > 0);
     const raw: InstagramComment[] = await fetchInstagramComments(
-      top.map((p) => p.url),
-      25,
+      byComments.slice(0, INSTAGRAM_AUDIT.commentPosts).map((p) => p.url),
+      INSTAGRAM_AUDIT.commentsPerPost,
     );
-    const refByUrl = new Map(top.map((p) => [p.url, p.ref]));
+    const refByUrl = new Map(unified.map((p) => [p.url, p.ref]));
     return raw.map((c) => ({
       postRef: refByUrl.get(c.postUrl) ?? '?',
       text: c.text,
@@ -391,6 +398,7 @@ async function runSynthesis(input: {
     'Ground every claim in the evidence given. top10Pains.quote must be copied verbatim from the painQuotes evidence (do not paraphrase into the quote field — paraphrase goes in "pain"). Pick and rank the strongest, most distinct 10; merge near-duplicates.',
     'hookLines must sound like this specific creator wrote them — use their real phrases, sentence rhythm and emoji habits from voiceGuide, not generic marketing copy.',
     'productOpportunities: exactly 5 candidate digital products this creator could sell to this audience. Exactly one must have recommended: true — the one with the best score.',
+    `If the niche touches health, medical conditions, mental health or money: ${SENSITIVE_PRODUCT_RULE}`,
     'partnershipPitchAngle: the single sharpest insight to open outreach with — something that proves you actually looked at their content, not a template line.',
   ].join('\n');
 
@@ -582,7 +590,10 @@ export async function auditCreator(
       try {
         fetched =
           candidate === 'INSTAGRAM'
-            ? await fetchInstagramSource(normalizeUsername(handleOrUrl), postCount)
+            ? await fetchInstagramSource(
+                normalizeUsername(handleOrUrl),
+                options.postCount ? postCount : INSTAGRAM_AUDIT.posts,
+              )
             : await fetchYoutubeSource(handleOrUrl, postCount);
         platform = candidate;
         break;
@@ -690,6 +701,19 @@ export async function auditCreator(
 
   // --- persist ---
   const recommended = report.productOpportunities.find((p) => p.recommended)!;
+  // Sensitive niches: flag any product idea that crosses from a lifestyle guide into advice.
+  const existing = await prisma.creator.findUnique({ where: { handle } });
+  const productFlag = isSensitiveNiche(`${report.niche} ${existing?.niche ?? ''}`)
+    ? report.productOpportunities
+        .map((p) => ({ p, flags: productLineFlags(`${p.title} ${p.promise}`) }))
+        .filter((x) => x.flags.length)
+        .map((x) => `"${x.p.title}": ${x.flags.join(', ')}`)
+        .join('; ') || null
+    : null;
+  if (productFlag) log.warn(`@${handle} product idea(s) cross the lifestyle-guide line — ${productFlag}`);
+  // Never overwrite an email the pipeline already found with "not found".
+  const businessEmail = socialLinks.businessEmail ?? existing?.businessEmail ?? null;
+  const emailSource = socialLinks.businessEmail ? 'audit (bio / link-in-bio page)' : (existing?.emailSource ?? null);
   const creator = await prisma.creator.upsert({
     where: { handle },
     create: {
@@ -707,7 +731,9 @@ export async function auditCreator(
       instagramUrl: socialLinks.instagramUrl,
       tiktokUrl: socialLinks.tiktokUrl,
       websiteUrl: socialLinks.websiteUrl,
-      businessEmail: socialLinks.businessEmail,
+      businessEmail,
+      emailSource,
+      productFlag,
     },
     update: {
       platform,
@@ -722,7 +748,9 @@ export async function auditCreator(
       instagramUrl: socialLinks.instagramUrl,
       tiktokUrl: socialLinks.tiktokUrl,
       websiteUrl: socialLinks.websiteUrl,
-      businessEmail: socialLinks.businessEmail,
+      businessEmail,
+      emailSource,
+      productFlag,
     },
   });
 
@@ -743,6 +771,20 @@ export async function auditCreator(
       model: 'multi-pass (see raw)',
     },
   });
+
+  // --- quotes: only ones traced word for word to a post URL are saved ---
+  const { resolved, dropped } = resolveAuditQuotes(report.top10Pains, { posts, comments }, [
+    creator.handle,
+    creator.displayName ?? '',
+    profile.handle,
+    profile.displayName,
+  ]);
+  for (const d of dropped) log.warn(`quote not saved (${d.reason}): "${d.quote.slice(0, 80)}"`);
+  for (const q of resolved) {
+    await saveQuote({ ...q, creatorId: creator.id, foundAt: audit.createdAt, origin: originForPlatform(platform), auditId: audit.id });
+  }
+  log.info(`${resolved.length} sourced quote(s) saved, ${dropped.length} dropped`);
+  await refreshReviewFlag(creator);
 
   return {
     handle,

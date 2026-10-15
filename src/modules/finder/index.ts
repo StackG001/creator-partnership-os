@@ -1,19 +1,20 @@
 import type { Creator, Source } from '@prisma/client';
 import { prisma } from '../../lib/db.js';
 import { createLogger } from '../../lib/logger.js';
-import { QUALIFICATION } from '../../lib/constants.js';
+import { IG_BRAND_CATEGORIES, QUALIFICATION } from '../../lib/constants.js';
 import type { Platform, SourceKind } from '../../lib/constants.js';
 import { ensureCreatorDir, normalizeHandle, toRelative } from '../../lib/paths.js';
-import { extractUrls } from '../../lib/sources/linkInBio.js';
+import { extractUrls, fetchPage, pickLinkInBioUrl } from '../../lib/sources/linkInBio.js';
 import { analyzeMonetization, type ProductSignalResult } from '../../lib/sources/productSignals.js';
 import {
   fetchInstagramProfile,
-  fetchInstagramPosts,
   fetchInstagramRelatedProfiles,
   searchInstagramAccounts,
   searchInstagramHashtag,
   type InstagramPost,
+  type InstagramProfile,
 } from '../../lib/sources/instagram.js';
+import { ApifyBudgetError } from '../../lib/sources/apify.js';
 import {
   fetchYoutubeChannel,
   fetchYoutubeVideos,
@@ -34,6 +35,11 @@ export interface FinderOptions {
   minFollowers: number;
   maxFollowers: number;
   minEngagement: number;
+  /**
+   * Skip creators already in the database instead of refreshing them, so
+   * `limit` counts only brand-new creators. The pipeline's daily cap relies on this.
+   */
+  newOnly?: boolean;
 }
 
 export interface FinderResult {
@@ -61,7 +67,37 @@ interface Candidate {
   engagementRate: number;
   postsPerWeek: number;
   externalUrls: string[];
+  /** Instagram's business category ("Digital creator", "Product/service"…), when the account has one. */
+  businessCategory?: string | null;
+  /** The link-in-bio URL that stage 1 opened, when there was one. */
+  linkInBioUrl?: string | null;
   raw: unknown;
+}
+
+// --- handles we've already paid to look at ---------------------------------------
+
+/** Handles already in Creator or SeenHandle — never pay to scrape these again, from any search or niche. */
+async function knownHandles(platform: 'INSTAGRAM' | 'YOUTUBE', handles: string[]): Promise<Set<string>> {
+  if (!handles.length) return new Set();
+  const [creators, seen] = await Promise.all([
+    prisma.creator.findMany({ where: { handle: { in: handles } }, select: { handle: true } }),
+    prisma.seenHandle.findMany({ where: { platform, handle: { in: handles } }, select: { handle: true } }),
+  ]);
+  return new Set([...creators, ...seen].map((c) => c.handle));
+}
+
+async function markSeen(
+  platform: 'INSTAGRAM' | 'YOUTUBE',
+  handle: string,
+  outcome: 'KEPT' | 'REJECTED',
+  reason: string | null,
+  sourceId: string,
+): Promise<void> {
+  await prisma.seenHandle.upsert({
+    where: { platform_handle: { platform, handle } },
+    create: { platform, handle, outcome, reason, sourceId },
+    update: { outcome, reason },
+  });
 }
 
 function dedupe(values: string[]): string[] {
@@ -146,16 +182,24 @@ async function resolveSource(options: FinderOptions): Promise<Source> {
 
 // --- Instagram discovery ------------------------------------------------------
 
-async function collectInstagramUsernames(source: Source, wantCount: number): Promise<string[]> {
+/**
+ * Who to look at. IG_SEARCH already returns full profile details; hashtag and
+ * similar-account sources only give usernames, which are looked up one
+ * details result each. Every result is a paid Apify result, so this never
+ * fetches more than it needs.
+ */
+async function collectInstagramProfiles(
+  source: Source,
+  wantCount: number,
+): Promise<{ profiles: InstagramProfile[]; usernames: string[] }> {
   const overfetch = Math.max(wantCount * 3, wantCount + 10);
 
   if (source.kind === 'HASHTAG') {
     const posts: InstagramPost[] = await searchInstagramHashtag(source.query, overfetch);
-    return dedupe(posts.map((p) => p.ownerUsername)).slice(0, overfetch);
+    return { profiles: [], usernames: dedupe(posts.map((p) => p.ownerUsername)).slice(0, overfetch) };
   }
   if (source.kind === 'IG_SEARCH') {
-    const profiles = await searchInstagramAccounts(source.query, overfetch);
-    return dedupe(profiles.map((p) => p.username)).slice(0, overfetch);
+    return { profiles: await searchInstagramAccounts(source.query, overfetch), usernames: [] };
   }
   if (source.kind === 'SIMILAR_TO') {
     const seed = normalizeIgUsername(source.query);
@@ -165,7 +209,7 @@ async function collectInstagramUsernames(source: Source, wantCount: number): Pro
         `no related profiles returned for @${seed} — Instagram only exposes these for some accounts.`,
       );
     }
-    return dedupe(related.map((r) => r.username));
+    return { profiles: [], usernames: dedupe(related.map((r) => r.username)) };
   }
   throw new Error(`Instagram discovery does not support source kind "${source.kind}".`);
 }
@@ -180,37 +224,52 @@ function summarizeInstagram(posts: InstagramPost[], followers: number) {
   return { avgLikes, avgComments, engagementRate, postsPerWeek };
 }
 
-async function discoverInstagram(source: Source, wantCount: number): Promise<Candidate[]> {
-  const usernames = await collectInstagramUsernames(source, wantCount);
-  const candidates: Candidate[] = [];
+async function discoverInstagram(source: Source, wantCount: number, newOnly: boolean): Promise<Candidate[]> {
+  const collected = await collectInstagramProfiles(source, wantCount);
+  let usernames = collected.usernames;
+  if (newOnly && usernames.length) {
+    // Don't pay to look up anyone we've already looked at, from any search or niche.
+    const known = await knownHandles('INSTAGRAM', usernames.map((u) => normalizeHandle(u)));
+    const before = usernames.length;
+    usernames = usernames.filter((u) => !known.has(normalizeHandle(u)));
+    if (before > usernames.length) log.info(`skipped ${before - usernames.length} already-seen handle(s) before any paid lookup`);
+  }
 
+  const profiles = [...collected.profiles];
   for (const username of usernames) {
     try {
-      const [profile, posts] = await Promise.all([
-        fetchInstagramProfile(username),
-        fetchInstagramPosts(username, 12),
-      ]);
-      const stats = summarizeInstagram(posts, profile.followersCount);
-
-      candidates.push({
-        handle: normalizeHandle(profile.username),
-        platform: 'INSTAGRAM',
-        displayName: profile.fullName,
-        profileUrl: `https://www.instagram.com/${profile.username}/`,
-        bio: profile.biography,
-        followers: profile.followersCount,
-        followingCount: profile.followsCount,
-        postCount: profile.postsCount,
-        avgLikes: stats.avgLikes,
-        avgComments: stats.avgComments,
-        engagementRate: stats.engagementRate,
-        postsPerWeek: stats.postsPerWeek,
-        externalUrls: [...profile.externalUrls, ...posts.flatMap((p) => extractUrls(p.caption))],
-        raw: { profile, posts },
-      });
+      profiles.push(await fetchInstagramProfile(username));
     } catch (error) {
+      if (error instanceof ApifyBudgetError) throw error;
       log.warn(`skipping @${username}: ${(error as Error).message}`);
     }
+  }
+
+  const candidates: Candidate[] = [];
+  for (const profile of profiles) {
+    // Stage 1 is profile-only: the details result carries the latest ~12
+    // posts, enough to measure engagement. No separate paid posts run here —
+    // a profile without them is judged on what it has.
+    const posts = profile.latestPosts;
+    const stats = summarizeInstagram(posts, profile.followersCount);
+    candidates.push({
+      handle: normalizeHandle(profile.username),
+      platform: 'INSTAGRAM',
+      displayName: profile.fullName,
+      profileUrl: `https://www.instagram.com/${profile.username}/`,
+      bio: profile.biography,
+      followers: profile.followersCount,
+      followingCount: profile.followsCount,
+      postCount: profile.postsCount,
+      avgLikes: stats.avgLikes,
+      avgComments: stats.avgComments,
+      engagementRate: stats.engagementRate,
+      postsPerWeek: stats.postsPerWeek,
+      externalUrls: [...profile.externalUrls, ...posts.flatMap((p) => extractUrls(p.caption))],
+      businessCategory: profile.businessCategoryName,
+      linkInBioUrl: pickLinkInBioUrl(profile.externalUrls),
+      raw: { profile, posts },
+    });
   }
 
   return candidates;
@@ -252,8 +311,12 @@ function channelUrl(channel: YoutubeChannel): string {
   return `https://www.youtube.com/channel/${channel.channelId}`;
 }
 
-async function discoverYoutube(source: Source, wantCount: number): Promise<Candidate[]> {
-  const channels = await collectYoutubeChannels(source, wantCount);
+async function discoverYoutube(source: Source, wantCount: number, newOnly: boolean): Promise<Candidate[]> {
+  let channels = await collectYoutubeChannels(source, wantCount);
+  if (newOnly) {
+    const known = await knownHandles('YOUTUBE', channels.map((c) => normalizeHandle(c.customUrl || c.channelId)));
+    channels = channels.filter((c) => !known.has(normalizeHandle(c.customUrl || c.channelId)));
+  }
   const candidates: Candidate[] = [];
 
   for (const channel of channels) {
@@ -313,6 +376,9 @@ function evaluateQualification(
       reason: `engagement rate ${(candidate.engagementRate * 100).toFixed(2)}% below minimum ${(options.minEngagement * 100).toFixed(2)}%`,
     };
   }
+  if (candidate.businessCategory && IG_BRAND_CATEGORIES.test(candidate.businessCategory)) {
+    return { qualifies: false, reason: `brand/business account (Instagram category "${candidate.businessCategory}")` };
+  }
   if (signals.hasDigitalProduct) {
     return {
       qualifies: false,
@@ -320,6 +386,31 @@ function evaluateQualification(
     };
   }
   return { qualifies: true };
+}
+
+/** Money near a product word on a link page — "Sourdough Guide $19", "$27 · the course". */
+const PRICED_PRODUCT =
+  /\b(course|e-?book|guide|masterclass|template|workshop|program|class|bundle|printable)s?\b[^\n.]{0,40}[$£€]\s?\d|[$£€]\s?\d[^\n.]{0,40}\b(course|e-?book|guide|masterclass|template|workshop|program|class|bundle|printable)s?\b/i;
+
+async function withLinkInBio(signals: ProductSignalResult, url: string): Promise<ProductSignalResult> {
+  try {
+    const page = await fetchPage(url, 15_000);
+    const fromPage = analyzeMonetization(page.text ?? '', page.links);
+    const priced = PRICED_PRODUCT.exec(page.text ?? '');
+    const evidence = [
+      ...signals.evidence,
+      ...fromPage.evidence.map((e) => `link-in-bio ${url}: ${e}`),
+      ...(priced ? [`link-in-bio ${url}: "${priced[0]}"`] : []),
+    ];
+    return {
+      hasDigitalProduct: signals.hasDigitalProduct || fromPage.hasDigitalProduct || Boolean(priced),
+      evidence,
+      monetization: signals.monetization,
+    };
+  } catch (error) {
+    log.warn(`link-in-bio ${url} could not be read (${(error as Error).message}) — judged on bio only`);
+    return signals;
+  }
 }
 
 // --- persistence -----------------------------------------------------------------
@@ -397,8 +488,8 @@ export async function findCreators(options: FinderOptions): Promise<FinderResult
     try {
       const found =
         platform === 'INSTAGRAM'
-          ? await discoverInstagram(source, options.limit)
-          : await discoverYoutube(source, options.limit);
+          ? await discoverInstagram(source, options.limit, Boolean(options.newOnly))
+          : await discoverYoutube(source, options.limit, Boolean(options.newOnly));
       candidates.push(...found);
     } catch (error) {
       if (platforms.length > 1) {
@@ -409,17 +500,55 @@ export async function findCreators(options: FinderOptions): Promise<FinderResult
     }
   }
 
-  const evaluated = candidates.map((candidate) => {
-    const signals = analyzeMonetization(candidate.bio, candidate.externalUrls);
-    return { candidate, signals, verdict: evaluateQualification(candidate, options, signals) };
-  });
+  const evaluated = [];
+  for (const candidate of candidates) {
+    let signals = analyzeMonetization(candidate.bio, candidate.externalUrls);
+    let verdict = evaluateQualification(candidate, options, signals);
+    // Stage 1, last check (free — a plain page fetch): open their link-in-bio
+    // and drop anyone already selling a course, ebook, guide or paid product.
+    if (verdict.qualifies && candidate.platform === 'INSTAGRAM' && candidate.linkInBioUrl) {
+      signals = await withLinkInBio(signals, candidate.linkInBioUrl);
+      verdict = evaluateQualification(candidate, options, signals);
+    }
+    evaluated.push({ candidate, signals, verdict });
+  }
 
   const found = evaluated.length;
   const skipped = evaluated
     .filter((e) => !e.verdict.qualifies)
     .map((e) => ({ handle: e.candidate.handle, reason: e.verdict.reason! }));
 
-  const toPersist = evaluated.filter((e) => e.verdict.qualifies).slice(0, options.limit);
+  let qualifying = evaluated.filter((e) => e.verdict.qualifies);
+  if (options.newOnly && qualifying.length) {
+    const known = await prisma.creator.findMany({
+      where: { handle: { in: qualifying.map((e) => e.candidate.handle) } },
+      select: { handle: true },
+    });
+    const knownHandles = new Set(known.map((c) => c.handle));
+    for (const e of qualifying) {
+      if (knownHandles.has(e.candidate.handle)) {
+        skipped.push({ handle: e.candidate.handle, reason: 'already in the database' });
+      }
+    }
+    qualifying = qualifying.filter((e) => !knownHandles.has(e.candidate.handle));
+  }
+
+  const toPersist = qualifying.slice(0, options.limit);
+
+  // Remember everyone we paid to look at, so no later search re-scrapes them.
+  // Qualified-but-over-the-limit candidates aren't marked: a later run may want them.
+  const kept = new Set(toPersist.map((e) => e.candidate.handle));
+  const overflow = new Set(qualifying.slice(options.limit).map((e) => e.candidate.handle));
+  for (const { candidate, verdict } of evaluated) {
+    if (overflow.has(candidate.handle)) continue;
+    await markSeen(
+      candidate.platform,
+      candidate.handle,
+      kept.has(candidate.handle) ? 'KEPT' : 'REJECTED',
+      verdict.reason ?? (kept.has(candidate.handle) ? null : 'already in the database'),
+      source.id,
+    );
+  }
 
   const created: Creator[] = [];
   for (const { candidate, signals } of toPersist) {

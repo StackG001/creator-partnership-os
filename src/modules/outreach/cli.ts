@@ -1,8 +1,10 @@
+import { prisma } from '../../lib/db.js';
 import { runCli, type CliSpec } from '../../lib/cli.js';
 import { OUTREACH_CHANNELS, OUTREACH_SENDER, type OutreachChannel } from '../../lib/constants.js';
 import {
   approveOutreachMessage,
   draftOutreach,
+  sendChecks,
   listFollowUpsDue,
   logReply,
   sendOutreachMessage,
@@ -21,6 +23,8 @@ export const spec: CliSpec = {
     'npm run outreach -- --send cmu5abc123',
     'npm run outreach -- --send cmu5abc123 --test-to me@example.com',
     'npm run outreach -- --due',
+    'npm run outreach -- --handle princetonmicrogreens --channel email --preview   # seq 1→2→3, nothing saved',
+    'npm run outreach -- --check cmu5abc123      # would the auto-sender send it?',
     'npm run outreach -- --replied grantbakes --status interested',
     'npm run outreach -- --replied grantbakes --status declined',
   ],
@@ -35,6 +39,11 @@ export const spec: CliSpec = {
       type: 'string',
       description: 'With --send: deliver to this address instead of the real recipient. Subject gets a [TEST] prefix; the message is NOT marked SENT.',
     },
+    preview: {
+      type: 'boolean',
+      description: 'With --handle: draft the whole sequence (1, 2, 3) as a preview, each seeing the one before. Nothing is saved as a message and nothing can be sent.',
+    },
+    check: { type: 'string', description: 'Run every auto-send check on an OutreachMessage id and list what fails.' },
     due: {
       type: 'boolean',
       description: 'List creators due a follow-up (FOLLOW_UP.businessDays after their last send, no reply logged, excludes DECLINED/AGREED and anyone whose closing note (seq FOLLOW_UP.finalSequence) is already sent).',
@@ -136,6 +145,45 @@ await runCli(spec, async (ctx) => {
     } else {
       ctx.log.info(`sent to ${result.to} · Resend id ${result.externalId}`);
     }
+    return;
+  }
+
+  if (ctx.flags.check) {
+    const message = await prisma.outreachMessage.findUnique({ where: { id: String(ctx.flags.check) }, include: { creator: true } });
+    if (!message) throw new Error(`No outreach message found with id "${ctx.flags.check}".`);
+    const problems = await sendChecks(message);
+    if (ctx.json) {
+      console.log(JSON.stringify({ id: message.id, ok: !problems.length, problems }, null, 2));
+      return;
+    }
+    if (!problems.length) ctx.log.info(`${message.id} passes every check — the auto-sender would send it.`);
+    for (const p of problems) ctx.log.warn(p);
+    return;
+  }
+
+  if (ctx.flags.preview) {
+    if (!ctx.flags.handle) throw new Error('--preview needs --handle.');
+    const channel = parseChannel(String(ctx.flags.channel ?? 'email'));
+    const earlier: string[] = [];
+    const all = [];
+    for (const sequence of [1, 2, 3]) {
+      const r = await draftOutreach(String(ctx.flags.handle), channel, sequence, Number(ctx.flags.variants ?? 1), {
+        preview: true,
+        earlier: [...earlier],
+      });
+      earlier.push(r.drafts[0]!.body);
+      all.push(...r.drafts);
+    }
+    if (ctx.json) {
+      console.log(JSON.stringify(all, null, 2));
+      return;
+    }
+    for (const d of all) {
+      console.log(`\n===== seq ${d.sequence} · ${d.channel} · variant ${d.variant} =====`);
+      if (d.subject) console.log(`Subject: ${d.subject}\n`);
+      console.log(d.body);
+    }
+    ctx.log.info('preview only — nothing saved as a message, nothing sent.');
     return;
   }
 
