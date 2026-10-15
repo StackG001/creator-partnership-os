@@ -95,9 +95,16 @@ in code before anything can send (`sendChecks`, `npm run outreach -- --check <id
   (`BANNED_CLAIMS`); count the notes correctly; real first names only, taken
   from the display name's name part, never from a handle; sign-off appended
   in code. Same order and length budget on DMs, just shorter.
-- **Names:** the first name comes from the name part of the display name
-  (before any emoji, "|", tagline; letter-spaced names are joined). Never from
-  a handle, a comment or a guess. **No real first name → open with "Hi there,".**
+- **Names:** `firstNameFromDisplayName` decides in code, from the display name
+  only — never a handle, a comment or a guess: "Grow With Jonah" → Jonah,
+  "Emily | Mostly Greens" → Emily, "Chef Agathe 🌱 …" → Agathe, "Milo Meloy" →
+  Milo; brands ("Princeton Microgreens") → none. The draft is told exactly how
+  to open, and the greeting check rejects "Hi there" when a first name exists.
+  **No real first name → open with "Hi there,".**
+- **Sign-off on every channel, DMs included,** is appended in code; approving,
+  sending and marking a DM sent are all refused without it.
+- **Disqualified creators** (e.g. already sell a course/training) stay in the
+  database so the finder never re-adds them, and drafting to them is refused.
 - A comment the creator wrote themself (their own reply) is their words, not
   the audience's — stored as `CREATOR_CAPTION`, never as a follower comment.
 

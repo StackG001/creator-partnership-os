@@ -121,6 +121,7 @@ async function loadAuditEvidence(creatorId: string): Promise<AuditEvidence> {
 export function contactBlock(creator: { handle: string; status: string; doNotContact: boolean; retiredReason?: string | null }): string | null {
   if (creator.doNotContact) return `@${creator.handle} is do-not-contact (${creator.retiredReason ?? 'retired'}) — never contact again`;
   if (creator.status === 'RETIRED') return `@${creator.handle} is retired (${creator.retiredReason ?? 'no reason'})`;
+  if (creator.status === 'DISQUALIFIED') return `@${creator.handle} is disqualified`;
   return null;
 }
 
@@ -264,13 +265,49 @@ export function nameFromDisplayName(displayName: string): string {
   return cut.replace(/\s+/g, ' ').trim() || plain.trim();
 }
 
+// Words that make a display name a brand/channel, not "First Last".
+const BRAND_WORDS = new Set(
+  ('microgreens greens green garden gardens gardening farm farms farmer kitchen kitchens bakes bakery bakes cooks cooking ' +
+    'eats food foods recipes studio studios co company media official shop store collective club life living home homes ' +
+    'plants plant plantlife grow grows growing crafts craft makes making diy designs design creations journal journals ' +
+    'natural naturals beauty hair skin fitness fit health wellness travel travels van vanlife sourdough bread breads ' +
+    'mushrooms mushroom africa america usa uk tv channel podcast daily simply mostly just the and of my our your')
+    .split(' '),
+);
+const TITLES = /^(chef|dr|doc|coach|mama|mamma|momma|mom|mum|papa|dad|mrs|mr|ms|miss|auntie|aunty|uncle|grandma|nana|pastor|teacher|nurse|sister|brother)$/i;
+
+function isNameWord(w: string): boolean {
+  return /^\p{Lu}[\p{Ll}'’-]+$/u.test(w) && w.length >= 2 && !BRAND_WORDS.has(w.toLowerCase());
+}
+
+/**
+ * The creator's real first name when their display name clearly contains one,
+ * else null (→ "Hi there,"). Never from the handle.
+ *   "Grow With Jonah" → Jonah · "Emily | Mostly Greens | …" → Emily · "Chef Agathe 🌱 …" → Agathe
+ *   "Milo Meloy" → Milo · "Planted By Sally" → Sally · "Princeton Microgreens" → null · "makayyyy__" → null
+ */
+export function firstNameFromDisplayName(rawDisplayName: string | null | undefined): string | null {
+  if (!rawDisplayName) return null;
+  const part = nameFromDisplayName(rawDisplayName);
+  // "Cooking with Jonah", "Grow With Jonah", "Planted By Sally"
+  const withBy = /\b(?:with|by|from)\s+(\p{Lu}[\p{Ll}'’-]+)\b/iu.exec(part);
+  if (withBy && isNameWord(withBy[1]!)) return withBy[1]!;
+  const ws = part.split(/\s+/).filter(Boolean);
+  while (ws.length > 1 && TITLES.test(ws[0]!)) ws.shift();
+  // One name word ("Emily", "Karina"), or "First Last" with no brand words ("Milo Meloy").
+  if (ws.length === 1 && isNameWord(ws[0]!)) return ws[0]!;
+  if (ws.length === 2 && isNameWord(ws[0]!) && isNameWord(ws[1]!)) return ws[0]!;
+  return null;
+}
+
 function addressInstruction(rawDisplayName: string, handle: string): string {
-  const displayName = nameFromDisplayName(rawDisplayName);
+  const first = firstNameFromDisplayName(rawDisplayName);
   return [
-    `The creator's display name is "${displayName}" (handle @${handle}).`,
-    "If that display name contains a real person's first name, open with that first name (e.g. \"Hi Agathe,\").",
-    'If there is no real first name in it (a brand, a channel name, a handle, initials), open with exactly "Hi there," — never a channel name, never one word of a brand name as if it were a name.',
-    'Never guess a personal name from comments or quotes, and never build one from the handle/username (e.g. "makayyyy__" is not a name). If unsure, "Hi there,". Never a placeholder like "[Name]".',
+    `The creator's display name is "${nameFromDisplayName(rawDisplayName)}" (handle @${handle}).`,
+    first
+      ? `Their real first name is ${first}. Open with exactly "Hi ${first}," — not "Hi there", not their channel name.`
+      : 'There is no confirmed real first name. Open with exactly "Hi there," — never a channel name, a handle, or a name guessed from comments.',
+    'Never a placeholder like "[Name]".',
   ].join(' ');
 }
 
@@ -312,10 +349,9 @@ const SHARED_RULES = [
 const WE_BUILD = 'we build the whole thing — research, writing, design, sales page and setup';
 const THEY_DO = 'they only make content to promote it, and keep 50% of every sale';
 
-function signOffRule(isDm: boolean): string {
-  return isDm
-    ? `End with exactly this two-line sign-off, nothing after it:\n${SIGN_OFF}`
-    : 'Do not write a sign-off or your name at the end — the sign-off is appended automatically after the ask.';
+function signOffRule(_isDm: boolean): string {
+  // Every channel, DMs included, gets SIGN_OFF appended in code (withSignOff).
+  return 'Do not write a sign-off or your name at the end — the sign-off is appended automatically after the ask.';
 }
 
 interface SystemInput {
@@ -386,7 +422,7 @@ function buildCloseSystem({ address, isDm, channel, sequence, variants }: System
     `Under ${isDm ? 45 : 60} words, not counting the sign-off.`,
     ...SHARED_RULES.slice(0, 3),
     address,
-    isDm ? 'This is a DM: casual, no formal sign-off block.' : 'Do not write a sign-off or your name — it is appended automatically.',
+    isDm ? 'This is a DM: keep it casual. Do not write a sign-off or your name — it is appended automatically.' : 'Do not write a sign-off or your name — it is appended automatically.',
     `Channel: ${CHANNEL_NOTE[channel]}${channel === 'EMAIL' ? ' Subject: short and low-key.' : ''}`,
     `Write ${variants} genuinely distinct variants — different phrasing, same honest intent.`,
   ].join('\n');
@@ -580,7 +616,8 @@ export async function draftOutreach(
   for (const [i, d] of drafted.entries()) {
     const variant = variantLabel(i);
     const isEmail = channel === 'EMAIL';
-    const body = DM_CHANNELS.has(channel) ? d.body : withSignOff(d.body);
+    // The sign-off is added in code on every channel, DMs included — never left to the model.
+    const body = withSignOff(d.body);
 
     const lines: string[] = [];
     lines.push(`# Outreach draft — ${channel} · sequence ${sequence} · variant ${variant}`);
@@ -679,6 +716,7 @@ export async function approveOutreachMessage(messageId: string): Promise<Approve
   assertContactable(message.creator, 'approving');
   await assertClearForOutreach(message.creator, 'approving', { quoteFree: isQuoteFreeClosingNote(message) });
 
+  assertSignOff(message.body, 'approving');
   // Approving is Gerald's decision, so it also lifts any hold.
   const updated = await prisma.outreachMessage.update({
     where: { id: messageId },
@@ -823,7 +861,8 @@ export function greetingProblems(body: string, displayName: string | null, handl
   // The bare "Name —" form only counts as a greeting when it's a name-length opener, not a sentence.
   const name = (m?.[1] ?? (m?.[2] && m[2].trim().split(/\s+/).length <= 3 ? m[2] : '') ?? '').trim();
   if (!name) return [];
-  if (/^there$/i.test(name)) return [];
+  const first = firstNameFromDisplayName(displayName);
+  if (/^there$/i.test(name)) return first ? [`opens with "Hi there" but their display name clearly has a first name — open with "Hi ${first},"`] : [];
   const nameWords = words(name);
   if (!displayName) return [`opens with "${name}" but the creator has no display name on record to confirm it`];
   const display = words(displayName);
@@ -979,6 +1018,11 @@ export async function autoSendEmails(options: { max: number; dryRun?: boolean; l
   return out;
 }
 
+/** A message without the sign-off never goes out — by email or by hand. */
+function assertSignOff(body: string, step: string): void {
+  if (!body.trimEnd().endsWith(SIGN_OFF)) throw new Error(`${step} refused: the sign-off is missing — redraft the message.`);
+}
+
 // --- DMs (sent by hand from the DM queue page) ---------------------------------------
 
 /** Approve one DM variant for the queue; its sibling variants become SUPERSEDED. */
@@ -987,6 +1031,7 @@ export async function approveDmVariant(messageId: string): Promise<void> {
   if (!m) throw new Error(`No outreach message "${messageId}".`);
   if (m.channel === 'EMAIL') throw new Error('emails go through the auto-sender, not the DM queue');
   assertContactable(m.creator, 'approving');
+  assertSignOff(m.body, 'approving');
   await approveOutreachMessage(messageId);
   await prisma.outreachMessage.updateMany({
     where: { creatorId: m.creatorId, sequence: m.sequence, channel: m.channel, status: 'DRAFT', id: { not: m.id } },
@@ -1000,6 +1045,7 @@ export async function markDmSent(messageId: string): Promise<{ sentAt: Date; nex
   if (!m) throw new Error(`No outreach message "${messageId}".`);
   if (m.channel === 'EMAIL') throw new Error('emails are sent through Resend, not marked by hand');
   assertContactable(m.creator, 'marking sent');
+  assertSignOff(m.body, 'marking sent');
   if (m.status !== 'APPROVED') throw new Error(`message is ${m.status}, not APPROVED`);
   const sentAt = new Date();
   await prisma.outreachMessage.update({ where: { id: m.id }, data: { status: 'SENT', sentAt } });
