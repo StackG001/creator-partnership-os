@@ -244,7 +244,15 @@ Plan, monthly limit, cycle dates and usage are **read live** from
   kept in the library but unused (`PIPELINE.instagram.discoveryKinds`).
 - **Spread:** at most one search term per niche per run, producers take turns.
 - **Emails:** never take an address on a platform domain (Linktree, Instagram,
-  Google, app stores…); a send check holds any email to a platform address.
+  Google, app stores, link shorteners…); a send check holds any email to a
+  platform address or to a domain with no mail servers (MX). When a creator has
+  their own website, its home/contact/about pages are checked and an address on
+  the site's own domain wins. Bare shortener links ("https://bit.ly") are ignored.
+- **Contact routes:** email first; otherwise an Instagram DM (for YouTube
+  creators, the Instagram their channel links to). YouTube has no channel
+  messaging, so YT_ABOUT is never drafted; a creator with neither is not drafted.
+  Gerald can add an email found by hand (YouTube's "View email address" needs a
+  sign-in + captcha) — record the source in `emailSource`.
 - **Never re-scrape a handle.** `SeenHandle` + `Creator` are checked before any
   paid call, across every search and niche.
 - Before changing Instagram scope or schedule, show Gerald

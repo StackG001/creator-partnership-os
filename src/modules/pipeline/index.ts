@@ -23,6 +23,7 @@ import {
 } from '../../lib/sources/apify.js';
 import { INSTAGRAM_ACTOR } from '../../lib/sources/instagram.js';
 import { findBusinessEmail } from '../../lib/sources/emailFinder.js';
+import { instagramDmHandle } from '../../lib/sources/instagramGoogle.js';
 import { QuoteSourceError } from '../../lib/quotes.js';
 import { findCreators } from '../finder/index.js';
 import { scoreCreator } from '../scorer/index.js';
@@ -402,8 +403,15 @@ async function runPlatform(platform: PipelinePlatform): Promise<RunDetails & { a
     const l = line(creator);
     l.audited = true;
     if (!creator.businessEmail && !creator.contactEmail) await tryFindEmail(creator).catch(() => null);
-    const fresh = await prisma.creator.findUnique({ where: { id: creator.id } });
-    const channel: OutreachChannel = fresh?.businessEmail || fresh?.contactEmail ? 'EMAIL' : isIg ? 'IG_DM' : 'YT_ABOUT';
+    const fresh = (await prisma.creator.findUnique({ where: { id: creator.id } }))!;
+    // Email first; otherwise an Instagram DM (a YouTube creator's linked Instagram).
+    // YouTube has no channel messaging any more, so YT_ABOUT is never drafted.
+    const channel: OutreachChannel | null =
+      fresh.businessEmail || fresh.contactEmail ? 'EMAIL' : instagramDmHandle(fresh) ? 'IG_DM' : null;
+    if (!channel) {
+      l.heldBack = 'no email and no Instagram found — no way to contact, not drafted';
+      continue;
+    }
     try {
       await draftOutreach(creator.handle, channel, 1, PIPELINE.outreachVariants);
       const saved = await prisma.outreachMessage.findMany({ where: { creatorId: creator.id, sequence: 1, status: 'DRAFT' }, orderBy: { variant: 'asc' } });
@@ -463,7 +471,7 @@ async function draftDueFollowUps(dryRun: boolean): Promise<FollowUpDrafted[]> {
     const old = pending.filter((m) => m.createdAt < SEQUENCE_DESIGN_SINCE);
     let email = creator.businessEmail ?? creator.contactEmail;
     if (!email && f.channel !== 'EMAIL' && !dryRun) email = await tryFindEmail(creator).catch(() => null);
-    const channel: OutreachChannel = email ? 'EMAIL' : f.channel;
+    const channel: OutreachChannel = email ? 'EMAIL' : f.channel === 'YT_ABOUT' && instagramDmHandle(creator) ? 'IG_DM' : f.channel;
     const entry: FollowUpDrafted = { handle: f.handle, sequence: f.nextSequence, channel, replacedOld: old.length, switchedToEmail: channel !== f.channel };
     if (dryRun) {
       out.push(entry);
@@ -804,7 +812,11 @@ export async function qualifiedLeads(): Promise<QualifiedLead[]> {
       link,
       niche: c.source?.nicheRef?.name ?? c.niche?.slice(0, 60) ?? '—',
       score: c.score,
-      contact: email ? `email (${email})` : c.platform === 'INSTAGRAM' ? 'DM (Instagram)' : 'DM (YouTube About)',
+      contact: email
+        ? `email (${email})`
+        : instagramDmHandle(c)
+          ? `DM (Instagram @${instagramDmHandle(c)})`
+          : 'none found — no email or Instagram',
       status,
     };
   });

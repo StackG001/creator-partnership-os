@@ -7,6 +7,7 @@ import { prisma } from '../../lib/db.js';
 import { createLogger } from '../../lib/logger.js';
 import { outputsRoot } from '../../lib/paths.js';
 import { approveDmVariant, markDmSent } from '../outreach/index.js';
+import { instagramDmHandle } from '../../lib/sources/instagramGoogle.js';
 
 // The DM queue: DMs are never sent automatically. This local page lists
 // approved, unsent DMs oldest first with a "Copy & open" button (copies the
@@ -42,8 +43,8 @@ export async function dmQueueUrl(host = 'localhost'): Promise<string> {
 }
 
 /** Where the DM is sent from, per channel. */
-export function openUrl(channel: string, handle: string, profileUrl: string | null): string {
-  if (channel === 'IG_DM') return `https://ig.me/m/${handle}`;
+export function openUrl(channel: string, handle: string, profileUrl: string | null, igHandle: string | null = null): string {
+  if (channel === 'IG_DM') return `https://ig.me/m/${igHandle ?? handle}`;
   if (channel === 'YT_ABOUT') return `${(profileUrl ?? `https://www.youtube.com/@${handle}`).replace(/\/+$/, '')}/about`;
   if (channel === 'X_DM') return `https://x.com/${handle}`; // X has no DM deep link by handle; Message button is on the profile
   return profileUrl ?? '#';
@@ -52,7 +53,7 @@ export function openUrl(channel: string, handle: string, profileUrl: string | nu
 export async function queueData() {
   const msgs = await prisma.outreachMessage.findMany({
     where: { channel: { not: 'EMAIL' }, status: { in: ['DRAFT', 'APPROVED'] }, creator: { doNotContact: false, status: { not: 'RETIRED' } } },
-    include: { creator: { select: { handle: true, displayName: true, profileUrl: true } } },
+    include: { creator: { select: { handle: true, displayName: true, profileUrl: true, platform: true, instagramUrl: true } } },
     orderBy: [{ createdAt: 'asc' }, { variant: 'asc' }],
   });
   const item = (m: (typeof msgs)[number]) => ({
@@ -64,7 +65,7 @@ export async function queueData() {
     variant: m.variant,
     body: m.body,
     createdAt: m.createdAt,
-    open: openUrl(m.channel, m.creator.handle, m.creator.profileUrl),
+    open: openUrl(m.channel, m.creator.handle, m.creator.profileUrl, instagramDmHandle(m.creator)),
   });
   const ready = msgs.filter((m) => m.status === 'APPROVED').map(item);
   const readyKeys = new Set(msgs.filter((m) => m.status === 'APPROVED').map((m) => `${m.creatorId}:${m.sequence}:${m.channel}`));

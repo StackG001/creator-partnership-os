@@ -29,6 +29,12 @@ const NOT_PROFILES = new Set([
 // A profile page, or one of its tabs (/handle/reels/ etc. — Google often indexes those).
 const PROFILE_URL = /^https?:\/\/(?:www\.|[a-z]{2}\.)?instagram\.com\/([A-Za-z0-9._]{1,30})\/?(?:(?:reels|tagged|guides|channel)\/?)?(?:[?#].*)?$/i;
 
+/** The Instagram handle a creator can be DMed at: their own (Instagram creators) or the one their YouTube links to. */
+export function instagramDmHandle(c: { platform: string; handle: string; instagramUrl: string | null }): string | null {
+  if (c.platform === 'INSTAGRAM') return c.handle;
+  return c.instagramUrl ? profileHandle(c.instagramUrl) : null;
+}
+
 export function profileHandle(url: string): string | null {
   const m = PROFILE_URL.exec(url.trim());
   if (!m) return null;
