@@ -37,6 +37,7 @@ import {
 import {
   addSimilarAccountSearches,
   chargeAudit,
+  ensureGoogleSources,
   ensureLegacyNiches,
   generateNiches,
   generationDue,
@@ -180,6 +181,9 @@ export async function sizeInstagramRun(): Promise<InstagramSizing> {
 // --- one platform run ----------------------------------------------------------------------
 
 interface SearchRun {
+  prefilter?: import('../finder/index.js').PrefilterStats;
+  /** Apify-confirmed profiles inside 10k–200k. */
+  inRange?: number;
   niche: string;
   query: string;
   kind: string;
@@ -236,6 +240,7 @@ async function tryFindEmail(creator: Creator): Promise<string | null> {
 async function runPlatform(platform: PipelinePlatform): Promise<RunDetails & { added: number; profilesChecked: number; spentMicros: number; budgetMicros: number }> {
   const isIg = platform === 'INSTAGRAM';
   await ensureLegacyNiches();
+  if (isIg) await ensureGoogleSources();
   const details: RunDetails = {
     searches: [],
     creators: [],
@@ -308,6 +313,8 @@ async function runPlatform(platform: PipelinePlatform): Promise<RunDetails & { a
         profilesChecked += result.found;
         run.found = result.found;
         run.added = result.created.length;
+        if (result.prefilter) run.prefilter = result.prefilter;
+        run.inRange = result.found - result.skipped.filter((x) => /^followers \d+ (below|above)/.test(x.reason)).length;
       } catch (error) {
         run.error = (error as Error).message;
         log.warn(`search "${s.query}" failed: ${run.error}`);
@@ -317,7 +324,7 @@ async function runPlatform(platform: PipelinePlatform): Promise<RunDetails & { a
       }
       run.spentMicros = Math.round((apifySpentThisProcess() - before) * MICRO);
       details.discoverySpentMicros += run.spentMicros;
-      if (!run.error || run.found) run.pausedNow = await recordSearchOutcome(s, run.added, run.spentMicros);
+      if (!run.error || run.found) run.pausedNow = await recordSearchOutcome(s, run.added, run.spentMicros, run.found);
       if (run.pausedNow) details.nicheEvents.pausedTerms.push(`${s.kind === 'HASHTAG' ? '#' : ''}${s.query} (${platform === 'INSTAGRAM' ? 'IG' : 'YT'})`);
       outcomes.push({ nicheId: s.nicheId, added: run.added, spentMicros: run.spentMicros, wasExplore: isExplore });
       details.searches.push(run);
@@ -687,8 +694,11 @@ export async function renderDailySummary(day: string): Promise<string> {
     }
     if (det.stoppedFor) out.push(`**Stopped:** ${det.stoppedFor}`);
     for (const s of det.searches ?? []) {
+      const pf = s.prefilter
+        ? ` · Google: ${s.prefilter.serperSearches} search(es), ${s.prefilter.profilesFound} profiles, ${s.prefilter.snippetKept} kept by snippet (${s.prefilter.droppedOutOfRange} out of range, ${s.prefilter.droppedNoCount} no count, ${s.prefilter.alreadyKnown} already seen) → ${s.prefilter.sentToApify} to Apify, ${s.inRange ?? 0} confirmed 10k–200k`
+        : '';
       out.push(
-        `- ${s.explore ? '🧭 explore' : '⛏ exploit'} · ${s.niche} · ${s.kind} "${s.query}" — ${s.error ? `FAILED: ${s.error}` : `${s.found} checked, ${s.added} kept`} · ${usd(s.spentMicros)}${s.pausedNow ? ' · **PAUSED**' : ''}`,
+        `- ${s.explore ? '🧭 explore' : '⛏ exploit'} · ${s.niche} · ${s.kind} "${s.query}" — ${s.error ? `FAILED: ${s.error}` : `${s.found} checked, ${s.added} kept`}${pf} · ${usd(s.spentMicros)}${s.pausedNow ? ' · **PAUSED**' : ''}`,
       );
     }
     for (const c of det.creators ?? []) {
@@ -737,7 +747,77 @@ export async function renderDailySummary(day: string): Promise<string> {
   }
 
   out.push(...(await measuredVsEstimate()));
+  out.push('');
+  out.push(...renderLeadsTable(await qualifiedLeads()));
   return out.join('\n');
+}
+
+// --- qualified leads (permanent: ends every run report) ------------------------------------
+
+export interface QualifiedLead {
+  handle: string;
+  platform: string;
+  link: string;
+  niche: string;
+  score: number | null;
+  contact: string;
+  status: string;
+}
+
+/**
+ * Every qualified creator still in play: cleared the score bar, audited or further,
+ * not retired / do-not-contact. Status from their newest live message.
+ */
+export async function qualifiedLeads(): Promise<QualifiedLead[]> {
+  const creators = await prisma.creator.findMany({
+    where: {
+      score: { gte: QUALIFICATION.minScore },
+      status: { in: ['AUDITED', 'CONTACTED', 'REPLIED', 'AGREED', 'LAUNCHED'] },
+      doNotContact: false,
+    },
+    include: {
+      source: { include: { nicheRef: true } },
+      messages: { where: { status: { notIn: ['CANCELLED', 'SUPERSEDED'] } }, orderBy: [{ sequence: 'desc' }, { createdAt: 'desc' }] },
+    },
+    orderBy: { updatedAt: 'desc' },
+  });
+  return creators.map((c) => {
+    const email = c.businessEmail ?? c.contactEmail;
+    const top = c.messages[0];
+    let status = 'audited — not drafted yet';
+    if (top) {
+      const n = `msg ${top.sequence}`;
+      if (top.status === 'REPLIED' || top.repliedAt) status = `replied (${n}) — waiting for me`;
+      else if (top.status === 'SENT') status = `sent (${n}, ${top.sentAt?.toISOString().slice(0, 10)})`;
+      else if (top.status === 'APPROVED') status = top.channel === 'EMAIL' ? `approved (${n}) — sends next run` : `waiting for me — ${n} DM ready in the queue`;
+      else if (top.heldFor?.startsWith(MANUAL_HOLD)) status = `waiting for me — pick/approve ${n}`;
+      else if (top.heldFor) status = `held (${n}): ${top.heldFor.slice(0, 80)}`;
+      else status = `drafted (${n}) — auto-send checks next run`;
+    }
+    const link =
+      c.platform === 'INSTAGRAM'
+        ? `instagram.com/${c.handle}`
+        : (c.profileUrl ?? `youtube.com/@${c.handle}`).replace(/^https?:\/\/(www\.)?/, '');
+    return {
+      handle: c.handle,
+      platform: c.platform === 'INSTAGRAM' ? 'Instagram' : 'YouTube',
+      link,
+      niche: c.source?.nicheRef?.name ?? c.niche?.slice(0, 60) ?? '—',
+      score: c.score,
+      contact: email ? `email (${email})` : c.platform === 'INSTAGRAM' ? 'DM (Instagram)' : 'DM (YouTube About)',
+      status,
+    };
+  });
+}
+
+export function renderLeadsTable(leads: QualifiedLead[]): string[] {
+  const out = ['## Qualified leads'];
+  if (!leads.length) return [...out, 'No qualified leads this run.'];
+  out.push('| @handle | Platform | Profile | Niche | Score | Contact | Status |', '|---|---|---|---|---|---|---|');
+  for (const l of leads) {
+    out.push(`| @${l.handle} | ${l.platform} | ${l.link} | ${l.niche} | ${l.score ?? '—'} | ${l.contact} | ${l.status} |`);
+  }
+  return out;
 }
 
 /** After 3 live Instagram runs: real cost per run vs the estimate, and per qualified creator. */
@@ -835,6 +915,8 @@ export async function dryRunDaily(): Promise<string> {
   out.push(`DM queue: ${await dmQueueUrl()}`);
   out.push('');
   out.push(...(await libraryReport()));
+  out.push('');
+  out.push(...renderLeadsTable(await qualifiedLeads()));
   return out.join('\n');
 }
 

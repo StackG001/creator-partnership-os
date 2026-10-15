@@ -102,6 +102,19 @@ export async function fetchInstagramProfile(username: string): Promise<Instagram
   return toProfile(item, username);
 }
 
+/** Several profiles in ONE actor run (1 details result each) — for hashtag / similar-accounts usernames. */
+export async function fetchInstagramProfiles(usernames: string[]): Promise<InstagramProfile[]> {
+  if (!usernames.length) return [];
+  const items = await runActor<Record<string, unknown>>({
+    resultsType: 'details',
+    directUrls: usernames.map(profileUrl),
+    resultsLimit: 1,
+  });
+  return items
+    .filter((item) => !item.error && typeof item.username === 'string')
+    .map((item) => toProfile(item, String(item.username)));
+}
+
 /**
  * Instagram has no public user-search API; this leans on the scraper actor's
  * `search` + `searchType: "user"` input (the same mechanism Instagram's own

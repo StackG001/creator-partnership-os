@@ -202,13 +202,33 @@ async function runOne<T>(actor: string, input: Record<string, unknown>, label: s
     ({ data: run } = await api<{ data: ActorRun }>(`/actor-runs/${run.id}?waitForFinish=60`));
   }
 
-  const cost = run.usageTotalUsd ?? 0;
-  spentUsd += cost;
-  log.info(`${label}: run ${run.id} ${run.status} · cost $${cost.toFixed(4)}`);
-
   if (run.status !== 'SUCCEEDED' && !abortedByUs) {
+    spentUsd += run.usageTotalUsd ?? 0;
     throw new Error(`Apify ${actor} run ${run.id} ended ${run.status} (${label}).`);
   }
 
-  return api<T[]>(`/datasets/${run.defaultDatasetId}/items?clean=true&format=json&limit=${maxItems}`);
+  // The results are paid for the moment the run finishes — retry the download so
+  // a network blip never throws a paid run away.
+  let items: T[] = [];
+  for (let attempt = 1; ; attempt++) {
+    try {
+      items = await api<T[]>(`/datasets/${run.defaultDatasetId}/items?clean=true&format=json&limit=${maxItems}`);
+      break;
+    } catch (error) {
+      if (attempt >= 4) {
+        spentUsd += Math.max(run.usageTotalUsd ?? 0, price);
+        throw error;
+      }
+      log.warn(`${label}: downloading results failed (${(error as Error).message}) — retry ${attempt}/3`);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+
+  // usageTotalUsd lags the real charge when the run has just finished; this actor
+  // charges per result (an empty search still returns — and bills — one item), so
+  // never count less than results × price.
+  const cost = Math.max(run.usageTotalUsd ?? 0, Math.max(1, items.length) * price);
+  spentUsd += cost;
+  log.info(`${label}: run ${run.id} ${run.status} · ${items.length} result(s) · cost $${cost.toFixed(4)}`);
+  return items;
 }

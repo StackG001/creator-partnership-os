@@ -39,6 +39,18 @@ No rows were deleted — they stay so the finder can dedupe against them.
 - The old Claude-in-Chrome quote-verification work for the retired batch was
   dropped (review flags cleared).
 
+## Qualified leads table (permanent rule — every report)
+
+Every run report, daily summary, and every reply to Gerald that mentions
+creators **ends with a "Qualified leads" table**: @handle, platform, profile
+link (instagram.com/<handle> or youtube.com/@<handle>), niche, score, contact
+method (email or DM), and current status (drafted / held / sent / waiting for
+me). Include it even with one lead; with none, say "No qualified leads this
+run". Generate it with `npm run pipeline -- --leads` (`qualifiedLeads()` /
+`renderLeadsTable()` in the pipeline module); the daily summary appends it
+automatically. Qualified = score ≥ `QUALIFICATION.minScore`, audited or
+further, not retired / do-not-contact.
+
 ## Core principle (permanent — every session)
 
 The whole system is built on **mining creators' comment sections for gold**:
@@ -216,6 +228,16 @@ Plan, monthly limit, cycle dates and usage are **read live** from
   `commentsPerPost` only if audits stop finding a sourced audience quote.
 - **YouTube is free:** up to 20 new creators/day (`PIPELINE.dailyNewCreatorCap`)
   across the niche library, same 70/30 split.
+- **Discovery = Google first (IG_GOOGLE):** Serper searches `site:instagram.com
+  <term> "followers"` (excluding posts/reels), reads the follower count from the
+  snippet, keeps ~8k–220k, dedupes against every Creator/SeenHandle, and sends
+  only survivors to ONE batched Apify profile lookup. Tested 2026-10-15: 86% of
+  survivors confirmed 10k–200k. Hashtag (newest posts only — tiny accounts),
+  similar-accounts (actor returns empty lists) and keyword account searches are
+  kept in the library but unused (`PIPELINE.instagram.discoveryKinds`).
+- **Spread:** at most one search term per niche per run, producers take turns.
+- **Emails:** never take an address on a platform domain (Linktree, Instagram,
+  Google, app stores…); a send check holds any email to a platform address.
 - **Never re-scrape a handle.** `SeenHandle` + `Creator` are checked before any
   paid call, across every search and niche.
 - Before changing Instagram scope or schedule, show Gerald

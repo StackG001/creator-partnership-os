@@ -15,6 +15,7 @@ import {
 } from '../../lib/quotes.js';
 import fs from 'node:fs/promises';
 import { isSensitiveNiche, productLineFlags, SENSITIVE_PRODUCT_RULE } from '../../lib/productLine.js';
+import { isPlatformEmail } from '../../lib/sources/emailFinder.js';
 import type { Prisma, Quote } from '@prisma/client';
 import {
   FOLLOW_UP,
@@ -848,6 +849,7 @@ export async function sendChecks(message: MessageWithCreator): Promise<string[]>
   if (message.heldFor?.startsWith(MANUAL_HOLD)) problems.push(message.heldFor);
   if (message.channel !== 'EMAIL') problems.push(`channel ${message.channel} — DMs go out by hand`);
   if (!message.to) problems.push('no recipient address');
+  else if (isPlatformEmail(message.to)) problems.push(`recipient ${message.to} is a platform address, not the creator's`);
   if (message.createdAt < SEQUENCE_DESIGN_SINCE) problems.push('drafted under the old sequence design — redraft it');
   if (['REPLIED', 'DECLINED', 'AGREED', 'LAUNCHED'].includes(creator.status)) problems.push(`creator is ${creator.status}`);
 

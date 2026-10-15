@@ -11,6 +11,8 @@ export const SOURCE_KINDS = [
   'HASHTAG',
   'YT_SEARCH',
   'IG_SEARCH',
+  /** Instagram profiles found on Google (via Serper) with the follower count read from the snippet — free pre-filter. */
+  'IG_GOOGLE',
   'SIMILAR_TO',
   'NEWSLETTER',
   'MANUAL',
@@ -252,6 +254,14 @@ export const PIPELINE = {
       /** Stage-1 profiles checked per creator who qualifies (a guess until measured). */
       profilesPerQualified: 20,
     },
+    /**
+     * Which search kinds Instagram discovery uses. IG_GOOGLE (Google/Serper pre-filter by
+     * snippet follower count, then one batched Apify confirm) since 2026-10-15: hashtags
+     * only return the newest posts (from tiny accounts), similar-accounts lists come back
+     * empty from this actor, and keyword account search mostly returns nothing. Those
+     * terms stay in the library, unused, in case that changes.
+     */
+    discoveryKinds: ['IG_GOOGLE'],
     /** Never more than this many paid audits in one run, however much budget there is. */
     maxAuditsPerRun: 10,
     /** Measured runs needed before sizing switches from the estimate to real averages. */

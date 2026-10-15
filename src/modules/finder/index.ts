@@ -7,7 +7,7 @@ import { ensureCreatorDir, normalizeHandle, toRelative } from '../../lib/paths.j
 import { extractUrls, fetchPage, pickLinkInBioUrl } from '../../lib/sources/linkInBio.js';
 import { analyzeMonetization, type ProductSignalResult } from '../../lib/sources/productSignals.js';
 import {
-  fetchInstagramProfile,
+  fetchInstagramProfiles,
   fetchInstagramRelatedProfiles,
   searchInstagramAccounts,
   searchInstagramHashtag,
@@ -15,6 +15,7 @@ import {
   type InstagramProfile,
 } from '../../lib/sources/instagram.js';
 import { ApifyBudgetError } from '../../lib/sources/apify.js';
+import { findInstagramProfilesOnGoogle } from '../../lib/sources/instagramGoogle.js';
 import {
   fetchYoutubeChannel,
   fetchYoutubeVideos,
@@ -42,8 +43,20 @@ export interface FinderOptions {
   newOnly?: boolean;
 }
 
+/** IG_GOOGLE only: what the free Google/Serper pre-filter did before anything was paid for. */
+export interface PrefilterStats {
+  serperSearches: number;
+  profilesFound: number;
+  snippetKept: number;
+  droppedOutOfRange: number;
+  droppedNoCount: number;
+  alreadyKnown: number;
+  sentToApify: number;
+}
+
 export interface FinderResult {
   sourceId: string;
+  prefilter?: PrefilterStats;
   found: number;
   qualified: number;
   created: Creator[];
@@ -196,8 +209,25 @@ async function resolveSource(options: FinderOptions): Promise<Source> {
 async function collectInstagramProfiles(
   source: Source,
   wantCount: number,
-): Promise<{ profiles: InstagramProfile[]; usernames: string[] }> {
+): Promise<{ profiles: InstagramProfile[]; usernames: string[]; prefilter?: PrefilterStats }> {
   const overfetch = Math.max(wantCount * 3, wantCount + 10);
+
+  if (source.kind === 'IG_GOOGLE') {
+    const g = await findInstagramProfilesOnGoogle(source.query);
+    return {
+      profiles: [],
+      usernames: g.kept.map((k) => k.handle),
+      prefilter: {
+        serperSearches: g.serperSearches,
+        profilesFound: g.profilesFound,
+        snippetKept: g.kept.length,
+        droppedOutOfRange: g.droppedOutOfRange,
+        droppedNoCount: g.droppedNoCount,
+        alreadyKnown: 0,
+        sentToApify: 0,
+      },
+    };
+  }
 
   if (source.kind === 'HASHTAG') {
     const posts: InstagramPost[] = await searchInstagramHashtag(source.query, overfetch);
@@ -229,24 +259,34 @@ function summarizeInstagram(posts: InstagramPost[], followers: number) {
   return { avgLikes, avgComments, engagementRate, postsPerWeek };
 }
 
-async function discoverInstagram(source: Source, wantCount: number, newOnly: boolean): Promise<Candidate[]> {
+async function discoverInstagram(
+  source: Source,
+  wantCount: number,
+  newOnly: boolean,
+): Promise<{ candidates: Candidate[]; prefilter?: PrefilterStats }> {
   const collected = await collectInstagramProfiles(source, wantCount);
   let usernames = collected.usernames;
-  if (newOnly && usernames.length) {
-    // Don't pay to look up anyone we've already looked at, from any search or niche.
-    const known = await knownHandles('INSTAGRAM', usernames.map((u) => normalizeHandle(u)));
-    const before = usernames.length;
-    usernames = usernames.filter((u) => !known.has(normalizeHandle(u)));
-    if (before > usernames.length) log.info(`skipped ${before - usernames.length} already-seen handle(s) before any paid lookup`);
+  if (usernames.length) {
+    // Never pay to look up anyone we've already looked at, from any search or niche
+    // (always for Google-found handles; for other kinds when newOnly).
+    if (newOnly || source.kind === 'IG_GOOGLE') {
+      const known = await knownHandles('INSTAGRAM', usernames.map((u) => normalizeHandle(u)));
+      const before = usernames.length;
+      usernames = usernames.filter((u) => !known.has(normalizeHandle(u)));
+      if (collected.prefilter) collected.prefilter.alreadyKnown = before - usernames.length;
+      if (before > usernames.length) log.info(`skipped ${before - usernames.length} already-seen handle(s) before any paid lookup`);
+    }
   }
+  if (collected.prefilter) collected.prefilter.sentToApify = usernames.length;
 
+  // One batched actor run for every username, not one run per profile.
   const profiles = [...collected.profiles];
-  for (const username of usernames) {
+  if (usernames.length) {
     try {
-      profiles.push(await fetchInstagramProfile(username));
+      profiles.push(...(await fetchInstagramProfiles(usernames)));
     } catch (error) {
       if (error instanceof ApifyBudgetError) throw error;
-      log.warn(`skipping @${username}: ${(error as Error).message}`);
+      log.warn(`profile lookup for ${usernames.length} handle(s) failed: ${(error as Error).message}`);
     }
   }
 
@@ -277,7 +317,7 @@ async function discoverInstagram(source: Source, wantCount: number, newOnly: boo
     });
   }
 
-  return candidates;
+  return { candidates, prefilter: collected.prefilter };
 }
 
 // --- YouTube discovery ---------------------------------------------------------
@@ -511,13 +551,16 @@ export async function findCreators(options: FinderOptions): Promise<FinderResult
     source.platform === 'BOTH' ? ['INSTAGRAM', 'YOUTUBE'] : [source.platform as 'INSTAGRAM' | 'YOUTUBE'];
 
   const candidates: Candidate[] = [];
+  let prefilter: PrefilterStats | undefined;
   for (const platform of platforms) {
     try {
-      const found =
-        platform === 'INSTAGRAM'
-          ? await discoverInstagram(source, options.limit, Boolean(options.newOnly))
-          : await discoverYoutube(source, options.limit, Boolean(options.newOnly));
-      candidates.push(...found);
+      if (platform === 'INSTAGRAM') {
+        const r = await discoverInstagram(source, options.limit, Boolean(options.newOnly));
+        candidates.push(...r.candidates);
+        prefilter = r.prefilter;
+      } else {
+        candidates.push(...(await discoverYoutube(source, options.limit, Boolean(options.newOnly))));
+      }
     } catch (error) {
       if (platforms.length > 1) {
         log.warn(`${platform} discovery skipped: ${(error as Error).message}`);
@@ -594,5 +637,5 @@ export async function findCreators(options: FinderOptions): Promise<FinderResult
 
   log.info(`found ${found}, qualified ${toPersist.length}, upserted ${created.length}`);
 
-  return { sourceId: source.id, found, qualified: toPersist.length, created, skipped };
+  return { sourceId: source.id, ...(prefilter ? { prefilter } : {}), found, qualified: toPersist.length, created, skipped };
 }

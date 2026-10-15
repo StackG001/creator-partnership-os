@@ -13,11 +13,22 @@ const log = createLogger('sources:email');
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const BUSINESS_HINT = /business|contact|hello|hey|hi@|partner|collab|press|management|inquir|enquir|booking|work|team|info/i;
 const JUNK = /\.(png|jpe?g|gif|webp|svg)$|@(example|sentry|wixpress|domain)\.|^(no-?reply|noreply)@/i;
+
+/**
+ * Addresses that belong to a platform, not the creator — link hubs, social
+ * networks, app stores, site builders. Never a creator's business email.
+ */
+const PLATFORM_EMAIL_DOMAINS = /@(?:[\w-]+\.)*(linktr\.ee|linktree\.com|beacons\.ai|stan\.store|linkin\.bio|lnk\.bio|bio\.link|tap\.bio|campsite\.bio|hoo\.be|koji\.to|withkoji\.com|carrd\.co|solo\.to|snipfeed\.co|instagram\.com|facebook\.com|meta\.com|fb\.com|tiktok\.com|youtube\.com|google\.com|apple\.com|amazon\.com|shopify\.com|squarespace\.com|wix\.com|wordpress\.com|godaddy\.com|mailchimp\.com|kit\.com|convertkit\.com|patreon\.com|gumroad\.com|teachable\.com|kajabi\.com|etsy\.com|substack\.com)$/i;
+
+export function isPlatformEmail(email: string): boolean {
+  return PLATFORM_EMAIL_DOMAINS.test(email.trim());
+}
 const HUBS = ['linktr.ee', 'beacons.ai', 'stan.store', 'linkin.bio', 'lnk.bio', 'bio.link', 'tap.bio', 'campsite.bio', 'hoo.be', 'koji.to', 'msha.ke', 'withkoji.com', 'carrd.co', 'solo.to', 'snipfeed.co'];
-const SOCIAL = /(instagram|tiktok|youtube|youtu\.be|facebook|twitter|x\.com|pinterest|threads|spotify|apple\.com|amazon|amzn)/i;
+// Outbound links that are never the creator's own site: socials, stores, app stores, the hub itself.
+const SOCIAL = /(instagram|tiktok|youtube|youtu\.be|facebook|twitter|x\.com|pinterest|threads|spotify|apple\.com|amazon|amzn|play\.google|google\.com|linktr|linktree|onelink|app\.link|bit\.ly)/i;
 
 function pick(text: string): string | null {
-  const all = [...new Set((text.match(EMAIL_RE) ?? []).map((e) => e.replace(/[.,;:]+$/, '')))].filter((e) => !JUNK.test(e));
+  const all = [...new Set((text.match(EMAIL_RE) ?? []).map((e) => e.replace(/[.,;:]+$/, '')))].filter((e) => !JUNK.test(e) && !isPlatformEmail(e));
   if (!all.length) return null;
   return all.find((e) => BUSINESS_HINT.test(e)) ?? all[0]!;
 }

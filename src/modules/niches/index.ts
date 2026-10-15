@@ -52,6 +52,28 @@ export async function ensureLegacyNiches(): Promise<void> {
   }
 }
 
+/**
+ * Every niche gets Google-pre-filtered Instagram terms (IG_GOOGLE): its keyword
+ * phrase (the YouTube keyword, not the "how do I…" one) and its #hashtag. Safe to call every run.
+ */
+export async function ensureGoogleSources(): Promise<number> {
+  const niches = await prisma.niche.findMany({ where: { status: { not: 'RETIRED' } }, include: { sources: true } });
+  let added = 0;
+  for (const n of niches) {
+    const terms = [
+      ...n.sources.filter((s) => s.kind === 'YT_SEARCH' && !/^how\b/i.test(s.query)).map((s) => s.query),
+      ...n.sources.filter((s) => s.kind === 'HASHTAG').map((s) => `#${s.query}`),
+    ];
+    for (const query of [...new Set(terms)]) {
+      const exists = await prisma.source.findUnique({ where: { platform_kind_query: { platform: 'INSTAGRAM', kind: 'IG_GOOGLE', query } } });
+      if (exists) continue;
+      await prisma.source.create({ data: { platform: 'INSTAGRAM', kind: 'IG_GOOGLE', query, niche: n.name, nicheId: n.id, notes: 'pipeline' } });
+      added++;
+    }
+  }
+  return added;
+}
+
 // --- weekly generation -------------------------------------------------------------------
 
 const GeneratedSchema = z.object({
@@ -63,7 +85,8 @@ const GeneratedSchema = z.object({
       origin: z.enum(['GENERATED', 'PROVEN']).describe('PROVEN when it comes straight from a niche that already produced qualified creators; otherwise GENERATED.'),
       sensitive: z.boolean().describe('True for health, medical conditions, mental health, or money/finance.'),
       why: z.string().describe('One line: what the audience in this niche keeps asking or struggling with.'),
-      keyword: z.string().describe('2-4 word search for creator accounts/channels in this niche (no "how", no #).'),
+      keyword: z.string().describe('2-4 word YouTube search for channels in this niche (no "how", no #).'),
+      igKeyword: z.string().describe('1-2 word Instagram account search for this niche (Instagram only matches short words in names/handles), e.g. "vanlife", "sourdough", "crochet".'),
       howDoI: z.string().describe('A real "how do I…" / "how to…" phrase this audience types into YouTube.'),
       hashtag: z.string().describe('One Instagram problem hashtag people in this niche use, without the #, lowercase, no spaces.'),
     }),
@@ -143,8 +166,10 @@ export async function generateNiches(count: number = NICHE_LIBRARY.newNichesPerW
     const terms: Array<{ platform: SearchPlatform; kind: string; query: string }> = [
       { platform: 'YOUTUBE', kind: 'YT_SEARCH', query: g.keyword },
       { platform: 'YOUTUBE', kind: 'YT_SEARCH', query: g.howDoI },
-      { platform: 'INSTAGRAM', kind: 'IG_SEARCH', query: g.keyword },
+      { platform: 'INSTAGRAM', kind: 'IG_SEARCH', query: g.igKeyword.trim().split(/\s+/).slice(0, 2).join(' ') },
       { platform: 'INSTAGRAM', kind: 'HASHTAG', query: hashtag },
+      { platform: 'INSTAGRAM', kind: 'IG_GOOGLE', query: g.keyword },
+      { platform: 'INSTAGRAM', kind: 'IG_GOOGLE', query: `#${hashtag}` },
     ];
     for (const t of terms) {
       await prisma.source.upsert({
@@ -156,6 +181,7 @@ export async function generateNiches(count: number = NICHE_LIBRARY.newNichesPerW
     created.push({ name: g.name, category: g.category, origin: g.origin, sensitive, why: g.why, terms: terms.map((t) => `${t.kind === 'HASHTAG' ? '#' : ''}${t.query} (${t.kind})`) });
   }
 
+  await ensureGoogleSources();
   const similar = await addSimilarAccountSearches();
   log.info(`added ${created.length} niche(s) and ${similar.length} similar-accounts search(es)`);
   return { created, similar };
@@ -199,12 +225,20 @@ export async function addSimilarAccountSearches(): Promise<string[]> {
 
 export type SourceWithNiche = Source & { nicheRef: Niche | null };
 
-const KINDS: Record<SearchPlatform, string[]> = {
+const KINDS: Record<SearchPlatform, readonly string[]> = {
   YOUTUBE: ['YT_SEARCH'],
-  INSTAGRAM: ['IG_SEARCH', 'HASHTAG', 'SIMILAR_TO'],
+  INSTAGRAM: PIPELINE.instagram.discoveryKinds,
 };
 
 const EXPLOIT_ORIGINS: NicheOrigin[] = ['PROVEN', 'SIMILAR_ACCOUNTS'];
+
+/** Instagram keyword searches are 1–2 words; anything longer returns no accounts. */
+export function isShortIgKeyword(query: string): boolean {
+  return query.trim().split(/\s+/).length <= 2;
+}
+
+/** Instagram: hashtags and similar-accounts first, short keywords last. */
+const IG_KIND_ORDER: Record<string, number> = { IG_GOOGLE: 0, SIMILAR_TO: 1, HASHTAG: 2, IG_SEARCH: 3 };
 
 function isExploit(s: SourceWithNiche): boolean {
   const n = s.nicheRef;
@@ -228,7 +262,7 @@ export async function pickSearches(
   const all = (await prisma.source.findMany({
     where: {
       platform,
-      kind: { in: KINDS[platform] },
+      kind: { in: [...KINDS[platform]] },
       notes: 'pipeline',
       pausedAt: null,
       active: true,
@@ -236,31 +270,50 @@ export async function pickSearches(
     },
     include: { nicheRef: true },
   })) as SourceWithNiche[];
-  const eligible = all.filter((s) => s.nicheRef?.status !== 'RETIRED' && !options.exclude?.has(s.id));
+  const eligible = all.filter(
+    (s) =>
+      s.nicheRef?.status !== 'RETIRED' &&
+      !options.exclude?.has(s.id) &&
+      // Instagram account search only matches short words — longer keyword searches return nothing.
+      !(s.kind === 'IG_SEARCH' && !isShortIgKeyword(s.query)),
+  );
 
   const rate = (s: SourceWithNiche) => (s.qualifiedCount + (s.nicheRef?.qualified ?? 0)) / Math.max(1, s.runCount);
-  const exploitPool = eligible.filter(isExploit).sort((a, b) => rate(b) - rate(a));
+  const kindRank = (s: SourceWithNiche) => (platform === 'INSTAGRAM' ? (IG_KIND_ORDER[s.kind] ?? 3) : 0);
+  const exploitPool = eligible.filter(isExploit).sort((a, b) => kindRank(a) - kindRank(b) || rate(b) - rate(a));
   const explorePool = eligible
     .filter((s) => !isExploit(s))
-    .sort((a, b) => (a.nicheRef?.runs ?? 0) - (b.nicheRef?.runs ?? 0) || (a.createdAt.getTime() - b.createdAt.getTime()));
+    .sort(
+      (a, b) =>
+        kindRank(a) - kindRank(b) ||
+        (a.nicheRef?.runs ?? 0) - (b.nicheRef?.runs ?? 0) ||
+        a.createdAt.getTime() - b.createdAt.getTime(),
+    );
 
-  // One term per niche when exploring, so the 30% covers as many new niches as possible.
+  // At most one term per niche per run, in BOTH pools, so a run spreads across the
+  // whole library instead of piling onto whichever niche produced first.
   const seenNiche = new Set<string>();
-  const exploreSpread = explorePool.filter((s) => {
+  const onePerNiche = (s: SourceWithNiche) => {
     const k = s.nicheId ?? s.id;
     if (seenNiche.has(k)) return false;
     seenNiche.add(k);
     return true;
-  });
+  };
+  // Exploit: least-recently-run niche first among producers, so producers take turns.
+  const byNicheAge = (a: SourceWithNiche, b: SourceWithNiche) =>
+    (a.nicheRef?.lastRunAt?.getTime() ?? 0) - (b.nicheRef?.lastRunAt?.getTime() ?? 0) || kindRank(a) - kindRank(b) || rate(b) - rate(a);
+  const exploitSpread = [...exploitPool].sort(byNicheAge).filter(onePerNiche);
+  const exploreSpread = explorePool.filter(onePerNiche);
 
   const nExplore = count <= 1 ? (exploitPool.length ? 0 : 1) : Math.max(1, Math.round(count * NICHE_LIBRARY.exploreShare));
-  const explore = exploreSpread.slice(0, nExplore);
-  const exploit = exploitPool.slice(0, count - explore.length);
-  // Top up from whichever pool still has terms.
+  const exploitShare = exploitSpread.length ? count - Math.min(nExplore, exploreSpread.length) : 0;
+  const exploit = exploitSpread.slice(0, exploitShare);
+  const explore = exploreSpread.slice(0, count - exploit.length);
+  // Top up only with terms from niches not used this run.
   const short = count - explore.length - exploit.length;
   if (short > 0) {
     const used = new Set([...explore, ...exploit].map((s) => s.id));
-    const rest = [...exploreSpread, ...explorePool, ...exploitPool].filter((s) => !used.has(s.id));
+    const rest = [...exploreSpread, ...exploitSpread].filter((s) => !used.has(s.id));
     for (const s of rest) {
       if (explore.length + exploit.length >= count) break;
       if (used.has(s.id)) continue;
@@ -330,15 +383,19 @@ export async function recordNicheRun(
 }
 
 /** Search-term outcome: reset the empty streak, or count it and pause the term at PIPELINE.pauseAfterEmptyRuns. */
-export async function recordSearchOutcome(source: Source, added: number, spentMicros: number): Promise<boolean> {
+export async function recordSearchOutcome(source: Source, added: number, spentMicros: number, found = 1): Promise<boolean> {
   const streak = added > 0 ? 0 : source.consecutiveEmptyRuns + 1;
-  const pause = streak >= PIPELINE.pauseAfterEmptyRuns;
+  // An Instagram keyword search that returns no accounts at all is dropped at once.
+  const noAccounts = source.kind === 'IG_SEARCH' && found === 0;
+  const pause = noAccounts || streak >= PIPELINE.pauseAfterEmptyRuns;
   await prisma.source.update({
     where: { id: source.id },
     data: {
       consecutiveEmptyRuns: streak,
       spentMicros: { increment: spentMicros },
-      ...(pause ? { pausedAt: new Date(), pausedReason: `no new qualified creators ${streak} runs in a row` } : {}),
+      ...(pause
+        ? { pausedAt: new Date(), pausedReason: noAccounts ? 'Instagram keyword search returned no accounts' : `no new qualified creators ${streak} runs in a row` }
+        : {}),
     },
   });
   if (pause) log.warn(`paused search term "${source.query}" (${source.platform}) — nothing new ${streak} runs in a row`);

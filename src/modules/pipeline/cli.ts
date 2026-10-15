@@ -1,5 +1,5 @@
 import { runCli, type CliSpec } from '../../lib/cli.js';
-import { dryRunDaily, renderDailySummary, runDailyPart, type DailyPart } from './index.js';
+import { dryRunDaily, qualifiedLeads, renderDailySummary, renderLeadsTable, runDailyPart, type DailyPart } from './index.js';
 
 export const spec: CliSpec = {
   name: 'pipeline',
@@ -18,12 +18,18 @@ export const spec: CliSpec = {
     force: { type: 'boolean', description: 'With --daily: run even if this part already ran today.' },
     'no-send': { type: 'boolean', description: 'With --daily: send nothing; every draft gets a MANUAL HOLD that only approving it lifts.' },
     summary: { type: 'boolean', description: 'Print today\'s summary from the database.' },
+    leads: { type: 'boolean', description: 'Print the Qualified leads table.' },
   },
 };
 
 await runCli(spec, async (ctx) => {
   if (ctx.dryRun) {
     console.log(await dryRunDaily());
+    return;
+  }
+  if (ctx.flags.leads) {
+    const leads = await qualifiedLeads();
+    console.log(ctx.json ? JSON.stringify(leads, null, 2) : renderLeadsTable(leads).join('\n'));
     return;
   }
   if (ctx.flags.summary) {
