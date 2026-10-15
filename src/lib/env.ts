@@ -39,7 +39,6 @@ export const envSchema = z.object({
   // discovery (optional until the finder lands)
   YOUTUBE_API_KEY: z.string().optional(),
   APIFY_TOKEN: z.string().optional(),
-  BRAVE_SEARCH_API_KEY: z.string().optional(),
   SERPER_API_KEY: z.string().optional(),
 
   // publishing (optional until the publisher lands)
@@ -63,7 +62,6 @@ export const REQUIRED_ENV_KEYS = ['ANTHROPIC_API_KEY', 'DATABASE_URL'] as const;
 export const OPTIONAL_ENV_KEYS = [
   'YOUTUBE_API_KEY',
   'APIFY_TOKEN',
-  'BRAVE_SEARCH_API_KEY',
   'SERPER_API_KEY',
   'WHOP_API_KEY',
   'WHOP_COMPANY_ID',

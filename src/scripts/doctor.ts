@@ -122,8 +122,7 @@ function mask(value: string): string {
 const OPTIONAL_UNLOCKS: Record<(typeof OPTIONAL_ENV_KEYS)[number], string> = {
   YOUTUBE_API_KEY: 'finder: YouTube channel discovery and stats',
   APIFY_TOKEN: 'finder: Instagram profile and post scraping',
-  BRAVE_SEARCH_API_KEY: 'product: web research with citations',
-  SERPER_API_KEY: 'product: web research (alternative to Brave)',
+  SERPER_API_KEY: 'product: web research with citations',
   WHOP_API_KEY: 'publisher: creating products and checkout links',
   WHOP_COMPANY_ID: 'publisher: which Whop company to publish under',
   RESEND_API_KEY: 'outreach: sending APPROVED emails (drafting works without it)',
@@ -380,18 +379,6 @@ async function checkOptionalApis(env: Env): Promise<void> {
       run: () =>
         fetch('https://api.apify.com/v2/users/me', {
           headers: { Authorization: `Bearer ${env.APIFY_TOKEN}` },
-        }),
-    },
-    {
-      name: 'brave search',
-      enabled: Boolean(env.BRAVE_SEARCH_API_KEY),
-      reason: 'BRAVE_SEARCH_API_KEY not set',
-      run: () =>
-        fetch('https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
-          headers: {
-            Accept: 'application/json',
-            'X-Subscription-Token': env.BRAVE_SEARCH_API_KEY ?? '',
-          },
         }),
     },
     {

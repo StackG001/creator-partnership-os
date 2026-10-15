@@ -32,13 +32,8 @@ export const KEY_HELP: Record<string, { label: string; where: string; required: 
     where: 'console.apify.com/account/integrations',
     required: false,
   },
-  BRAVE_SEARCH_API_KEY: {
-    label: 'Brave Search key (product research)',
-    where: 'api-dashboard.search.brave.com',
-    required: false,
-  },
   SERPER_API_KEY: {
-    label: 'Serper key (alternative to Brave)',
+    label: 'Serper key (product research)',
     where: 'serper.dev/api-key',
     required: false,
   },

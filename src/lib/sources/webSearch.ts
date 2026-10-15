@@ -2,9 +2,8 @@ import { getEnv } from '../env.js';
 import { createLogger } from '../logger.js';
 
 /**
- * Web research for the product module's research stage. Serper (a Google
- * Search API wrapper) is the configured provider — Brave is the documented
- * alternative but no key is set for it here.
+ * Web research for the product module's research stage, via Serper (a
+ * Google Search API wrapper) — the only web search provider.
  */
 
 const log = createLogger('sources:web-search');
