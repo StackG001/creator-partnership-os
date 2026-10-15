@@ -19,6 +19,26 @@ An internal tool for Gerald. End to end:
 5. Generate a **sales funnel**: sales page + order bump + upsell.
 6. **Publish on Whop** with revenue share, and **log the results**.
 
+## Fresh start — 2026-10-15 (permanent rule)
+
+On 2026-10-15 every creator found before that date (69) was retired
+(`status RETIRED`, `retiredReason "pre-fresh-start batch"`, see
+`src/scripts/fresh-start.ts`) and all their pending messages were `CANCELLED`.
+No rows were deleted — they stay so the finder can dedupe against them.
+
+- **Never re-contact a retired creator who received a message.** Everyone with
+  any SENT message (23, including replied conversations Gerald now handles by
+  hand, e.g. @therealnicolesvenson) has `doNotContact = true`: drafting,
+  approving, sending, auto-send, follow-ups and the DM queue all refuse them
+  (`contactBlock` in outreach), and the finder never re-adds them, whatever
+  search finds them. Never clear `doNotContact`.
+- Retired creators who were **never** sent anything (46) may come back only if
+  a new pipeline search rediscovers them; they re-enter at DISCOVERED under the
+  new source and need fully sourced quotes like anyone else (old unsourced
+  quotes still block drafting).
+- The old Claude-in-Chrome quote-verification work for the retired batch was
+  dropped (review flags cleared).
+
 ## Core principle (permanent — every session)
 
 The whole system is built on **mining creators' comment sections for gold**:

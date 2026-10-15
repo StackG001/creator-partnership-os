@@ -51,7 +51,7 @@ export function openUrl(channel: string, handle: string, profileUrl: string | nu
 
 export async function queueData() {
   const msgs = await prisma.outreachMessage.findMany({
-    where: { channel: { not: 'EMAIL' }, status: { in: ['DRAFT', 'APPROVED'] } },
+    where: { channel: { not: 'EMAIL' }, status: { in: ['DRAFT', 'APPROVED'] }, creator: { doNotContact: false, status: { not: 'RETIRED' } } },
     include: { creator: { select: { handle: true, displayName: true, profileUrl: true } } },
     orderBy: [{ createdAt: 'asc' }, { variant: 'asc' }],
   });

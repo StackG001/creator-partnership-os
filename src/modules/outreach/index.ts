@@ -114,6 +114,20 @@ async function loadAuditEvidence(creatorId: string): Promise<AuditEvidence> {
   return parsed.data;
 }
 
+// --- do not contact ---------------------------------------------------------------
+
+/** Retired or doNotContact creators get nothing from this system — no draft, approval, send or DM. */
+export function contactBlock(creator: { handle: string; status: string; doNotContact: boolean; retiredReason?: string | null }): string | null {
+  if (creator.doNotContact) return `@${creator.handle} is do-not-contact (${creator.retiredReason ?? 'retired'}) — never contact again`;
+  if (creator.status === 'RETIRED') return `@${creator.handle} is retired (${creator.retiredReason ?? 'no reason'})`;
+  return null;
+}
+
+function assertContactable(creator: Parameters<typeof contactBlock>[0], step: string): void {
+  const block = contactBlock(creator);
+  if (block) throw new Error(`${step} refused: ${block}.`);
+}
+
 // --- drafting -------------------------------------------------------------------
 
 // Phrases that claim work already exists. Nothing is built before a creator
@@ -494,6 +508,8 @@ export async function draftOutreach(
     throw new Error(`No creator found for handle "${handle}" — run the audit first.`);
   }
 
+  assertContactable(creator, 'drafting');
+
   // Refuses (and flags the creator) if any of their quotes lacks a source. A
   // closing note quotes no one and uses no audit evidence, so it only needs
   // the creator's real fields to be clean.
@@ -645,6 +661,7 @@ export async function approveOutreachMessage(messageId: string): Promise<Approve
       `Message ${messageId} is ${message.status}, not DRAFT — only draft messages can be approved.`,
     );
   }
+  assertContactable(message.creator, 'approving');
   await assertClearForOutreach(message.creator, 'approving', { quoteFree: isQuoteFreeClosingNote(message) });
 
   const updated = await prisma.outreachMessage.update({
@@ -700,6 +717,7 @@ export async function sendOutreachMessage(
   if (!message.to) {
     throw new Error(`Message ${messageId} has no recipient — fill in a "to" address before sending.`);
   }
+  assertContactable(message.creator, 'sending');
   await assertClearForOutreach(message.creator, 'sending', { quoteFree: isQuoteFreeClosingNote(message) });
 
   const isTest = Boolean(options.testTo);
@@ -806,6 +824,8 @@ type MessageWithCreator = Prisma.OutreachMessageGetPayload<{ include: { creator:
 export async function sendChecks(message: MessageWithCreator): Promise<string[]> {
   const problems: string[] = [];
   const { creator } = message;
+  const block = contactBlock(creator);
+  if (block) problems.push(block);
   if (message.channel !== 'EMAIL') problems.push(`channel ${message.channel} — DMs go out by hand`);
   if (!message.to) problems.push('no recipient address');
   if (message.createdAt < SEQUENCE_DESIGN_SINCE) problems.push('drafted under the old sequence design — redraft it');
@@ -942,6 +962,7 @@ export async function approveDmVariant(messageId: string): Promise<void> {
   const m = await prisma.outreachMessage.findUnique({ where: { id: messageId }, include: { creator: true } });
   if (!m) throw new Error(`No outreach message "${messageId}".`);
   if (m.channel === 'EMAIL') throw new Error('emails go through the auto-sender, not the DM queue');
+  assertContactable(m.creator, 'approving');
   await approveOutreachMessage(messageId);
   await prisma.outreachMessage.updateMany({
     where: { creatorId: m.creatorId, sequence: m.sequence, channel: m.channel, status: 'DRAFT', id: { not: m.id } },
@@ -951,9 +972,10 @@ export async function approveDmVariant(messageId: string): Promise<void> {
 
 /** Gerald sent this DM by hand: mark it SENT now, so the follow-up clock starts. Returns when the next one is due. */
 export async function markDmSent(messageId: string): Promise<{ sentAt: Date; nextDueAt: Date | null }> {
-  const m = await prisma.outreachMessage.findUnique({ where: { id: messageId } });
+  const m = await prisma.outreachMessage.findUnique({ where: { id: messageId }, include: { creator: true } });
   if (!m) throw new Error(`No outreach message "${messageId}".`);
   if (m.channel === 'EMAIL') throw new Error('emails are sent through Resend, not marked by hand');
+  assertContactable(m.creator, 'marking sent');
   if (m.status !== 'APPROVED') throw new Error(`message is ${m.status}, not APPROVED`);
   const sentAt = new Date();
   await prisma.outreachMessage.update({ where: { id: m.id }, data: { status: 'SENT', sentAt } });
@@ -1062,7 +1084,8 @@ export async function listFollowUpsDue(): Promise<FollowUpStatus[]> {
   const creators = await prisma.creator.findMany({
     where: {
       messages: { some: { sentAt: { not: null } } },
-      status: { notIn: ['DECLINED', 'AGREED'] },
+      status: { notIn: ['DECLINED', 'AGREED', 'RETIRED'] },
+      doNotContact: false,
     },
     include: {
       messages: {

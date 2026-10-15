@@ -28,6 +28,8 @@ export const CREATOR_STATUSES = [
   'LAUNCHED',
   'DECLINED',
   'DISQUALIFIED',
+  /** Taken out of the pipeline (e.g. the pre-fresh-start batch). See Creator.doNotContact. */
+  'RETIRED',
 ] as const;
 export type CreatorStatus = (typeof CREATOR_STATUSES)[number];
 
@@ -66,7 +68,16 @@ export const OUTREACH_STATUSES = [
   'DECLINED',
   /** A sibling variant of a message that was sent — never sent itself. */
   'SUPERSEDED',
+  /** Pending message withdrawn before it went out (e.g. its creator was retired). Never sent. */
+  'CANCELLED',
 ] as const;
+
+/**
+ * Fresh start: every creator found before this date was retired (status
+ * RETIRED). Anyone who had been sent a message is doNotContact forever;
+ * the rest may come back only if a new search rediscovers them.
+ */
+export const FRESH_START = { date: '2026-10-15', reason: 'pre-fresh-start batch' } as const;
 export type OutreachStatus = (typeof OUTREACH_STATUSES)[number];
 
 export const QUOTE_AUTHORS = ['CREATOR_CAPTION', 'FOLLOWER_COMMENT'] as const;

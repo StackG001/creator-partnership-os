@@ -80,7 +80,12 @@ interface Candidate {
 async function knownHandles(platform: 'INSTAGRAM' | 'YOUTUBE', handles: string[]): Promise<Set<string>> {
   if (!handles.length) return new Set();
   const [creators, seen] = await Promise.all([
-    prisma.creator.findMany({ where: { handle: { in: handles } }, select: { handle: true } }),
+    // A retired creator who was never messaged may be rediscovered by a new search;
+    // everyone else in the database (incl. every do-not-contact creator) is known.
+    prisma.creator.findMany({
+      where: { handle: { in: handles }, NOT: { status: 'RETIRED', doNotContact: false } },
+      select: { handle: true },
+    }),
     prisma.seenHandle.findMany({ where: { platform, handle: { in: handles } }, select: { handle: true } }),
   ]);
   return new Set([...creators, ...seen].map((c) => c.handle));
@@ -443,6 +448,28 @@ async function upsertCreator(
     raw: JSON.parse(JSON.stringify(candidate.raw)),
   };
 
+  if (existing?.doNotContact) {
+    throw new Error(`@${candidate.handle} is do-not-contact — never re-added`);
+  }
+  if (existing && existing.status === 'RETIRED') {
+    // Rediscovered by the new pipeline: back in at DISCOVERED under the new source.
+    // Their old quotes stay; any without a source still block drafting.
+    log.info(`@${candidate.handle} (retired, never contacted) rediscovered — back in the pipeline`);
+    return prisma.creator.update({
+      where: { id: existing.id },
+      data: {
+        ...shared,
+        status: 'DISCOVERED',
+        sourceId: source.id,
+        niche: source.niche ?? existing.niche,
+        score: null,
+        disqualifiedFor: null,
+        retiredAt: null,
+        retiredReason: null,
+        outputDir: existing.outputDir ?? toRelative(dir),
+      },
+    });
+  }
   if (existing) {
     return prisma.creator.update({
       where: { id: existing.id },
@@ -521,7 +548,7 @@ export async function findCreators(options: FinderOptions): Promise<FinderResult
   let qualifying = evaluated.filter((e) => e.verdict.qualifies);
   if (options.newOnly && qualifying.length) {
     const known = await prisma.creator.findMany({
-      where: { handle: { in: qualifying.map((e) => e.candidate.handle) } },
+      where: { handle: { in: qualifying.map((e) => e.candidate.handle) }, NOT: { status: 'RETIRED', doNotContact: false } },
       select: { handle: true },
     });
     const knownHandles = new Set(known.map((c) => c.handle));

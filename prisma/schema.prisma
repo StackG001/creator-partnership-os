@@ -116,7 +116,13 @@ model Creator {
   brandAt      DateTime?
 
   // pipeline
-  status          String  @default("DISCOVERED") // CreatorStatus: DISCOVERED | SCORED | AUDITED | CONTACTED | REPLIED | AGREED | LAUNCHED | DECLINED | DISQUALIFIED
+  status          String  @default("DISCOVERED") // CreatorStatus: DISCOVERED | SCORED | AUDITED | CONTACTED | REPLIED | AGREED | LAUNCHED | DECLINED | DISQUALIFIED | RETIRED
+  // Hard stop: never draft, approve, send or queue anything to this creator again,
+  // and never re-add them from a search. Set for everyone who was ever sent a message
+  // when they were retired (fresh start 2026-10-15).
+  doNotContact    Boolean   @default(false)
+  retiredAt       DateTime?
+  retiredReason   String?
   disqualifiedFor String?
   outputDir       String? // outputs/<handle>
   raw             Json? // untouched payload from the discovery source
@@ -269,7 +275,7 @@ model OutreachMessage {
   body     String
   hooks    Json? // the personalisation the message leans on, for later analysis
 
-  status     String    @default("DRAFT") // OutreachStatus: DRAFT | APPROVED | SENT | REPLIED | BOUNCED | IGNORED | DECLINED | SUPERSEDED
+  status     String    @default("DRAFT") // OutreachStatus: DRAFT | APPROVED | SENT | REPLIED | BOUNCED | IGNORED | DECLINED | SUPERSEDED | CANCELLED
   heldFor    String? // why the auto-sender held this message for a human (null = not held)
   sentAt     DateTime?
   repliedAt  DateTime?
