@@ -36,8 +36,11 @@ const PRODUCT_HOSTS = [
   'myshopify.com',
 ];
 
+// Any course/ebook/training/program offer in a bio counts, however it's phrased
+// ("microgreens course", "free training", "join my program") — a free training is
+// almost always the front of a paid funnel.
 const PRODUCT_KEYWORDS =
-  /\b(my (course|ebook|e-book|guide|template|masterclass|program)|the course|online course|digital product|template pack|notion template|masterclass|coaching program|1:1 coaching|group coaching|preorder|pre-order|now available|link in bio to (shop|buy)|shop my|buy my)\b/i;
+  /\b(my (course|ebook|e-book|guide|template|masterclass|program|academy|membership)|(?!(?:of|main|golf|race|obstacle|first|second|third|last|due|par|water|in|a|the|this|that)\b)[\w-]+ course\b|e-?books?|online course|digital (product|guide|download)s?|template pack|notion template|masterclass|(free|paid|online|video) (?:[\w-]+ ){0,2}(training|workshop|webinar|class)|join my (?:[\w-]+ ){0,2}(training|program|academy|membership|community|course|challenge)|academy|membership|coaching program|1:1 coaching|group coaching|mentorship|preorder|pre-order|now available|link in bio to (shop|buy)|shop my|buy my)\b/i;
 
 const SPONSOR_RE = /\b(sponsored|paid partnership|in partnership with|#ad\b)\b/i;
 const AFFILIATE_RE = /\b(affiliate|use code|discount code|promo code|my code)\b/i;
