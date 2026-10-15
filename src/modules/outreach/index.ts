@@ -304,7 +304,7 @@ const SHARED_RULES = [
   'Never claim anything already exists — no "already drafted", "already sketched", "I put together", "ready to send", "want me to send it over". Nothing is made until they say yes; every outline, guide or product is an offer in the future tense.',
   'Stay honest: no fake deadlines, no invented scarcity ("limited spots"), no "other creators already said yes", no guilt-tripping. Never imply a reply is owed.',
   'Never use: "hope this finds you well", "I came across your profile", "I\'d love to", "amazing content", "just following up", "circling back", "checking in", or any other filler phrase.',
-  'Every quoted line must be copied verbatim from the quotes given below, inside plain double quotes ("…") — never invent, merge or tidy a quote, never use «» or other quote marks. Show any cut with "…".',
+  'Every quoted line must be copied verbatim from the quotes given below, inside plain double quotes ("…") — or curly quotes “…” when the quote itself contains double quotes — never invent, merge or tidy a quote, never use «». Show any cut with "…".',
   'Refer to a quote by what it is ("a comment on your sourdough discard video") — never by a label or reference code.',
 ];
 
@@ -450,6 +450,21 @@ function rankByDemand(quotes: Quote[]): Quote[] {
   return [...quotes].sort((a, b) => score(b) - score(a));
 }
 
+/**
+ * A quote ready to paste: "…" wherever the stored text is an excerpt of the
+ * full comment, and curly marks when the comment itself contains straight
+ * double quotes (so the checker reads it as one quote).
+ */
+export function presentQuote(q: Pick<Quote, 'text' | 'fullText' | 'isTrimmed'>): string {
+  const text = q.text.trim();
+  const norm = (t: string) => t.replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim();
+  const full = q.fullText ? norm(q.fullText) : null;
+  const cutBefore = full ? !full.startsWith(norm(text)) : false;
+  const cutAfter = full ? !full.endsWith(norm(text)) : q.isTrimmed;
+  const body = `${cutBefore ? '…' : ''}${text}${cutAfter ? '…' : ''}`;
+  return text.includes('"') ? `“${body}”` : `"${body}"`;
+}
+
 function buildPitchPrompt(evidence: AuditEvidence, quotes: Quote[], sequence = 1): string {
   const recommended = evidence.productOpportunities.find((p) => p.recommended) ?? evidence.productOpportunities[0];
   return [
@@ -465,12 +480,11 @@ function buildPitchPrompt(evidence: AuditEvidence, quotes: Quote[], sequence = 1
     '',
     `Partnership pitch angle: ${evidence.partnershipPitchAngle}`,
     '',
-    'Quotes you may use — the only ones, strongest audience demand first. Each is word for word and traced to its post; quote them exactly or not at all:',
+    'Quotes you may use — the only ones, strongest audience demand first. Each is shown EXACTLY as it must appear in the message — same quote marks, same "…" where the comment was cut. Copy one character for character (you may cut more, marking each cut with "…"), or don\'t quote it:',
     ...rankByDemand(quotes)
       .slice(0, 8)
       .map(
-        (q) =>
-          `- ${q.pain ? `${q.pain} — ` : ''}"${q.text}" (${describeAuthor(q)})${q.isTrimmed ? ' [EXCERPT of a longer comment — show the cut with "…", never present it as the whole comment]' : ''}`,
+        (q) => `- ${q.pain ? `${q.pain} — ` : ''}${presentQuote(q)} (${describeAuthor(q)})`,
       ),
     '',
     `Recommended product angle: ${recommended?.title} — ${recommended?.promise} (for ${recommended?.whoItsFor})`,
@@ -816,7 +830,8 @@ export function greetingProblems(body: string, displayName: string | null, handl
     return [`opens with "${name}", which isn't in their display name "${displayName}"`];
   }
   const squash = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-  if (squash(displayName) === squash(handle)) {
+  // Only a single-token display name equal to the handle is "just the handle" — "Milo Meloy" vs @milomeloy is a real name.
+  if (display.length === 1 && squash(displayName) === squash(handle)) {
     return [`opens with "${name}", but their display name is just the handle — no confirmed first name`];
   }
   return [];
@@ -843,7 +858,9 @@ export async function sendChecks(message: MessageWithCreator): Promise<string[]>
     problems.push(`${status.blocked.length} of their quote(s) lack a source URL/author — fix with \`npm run quotes\``);
   }
   if (status.placeholders.length) problems.push(`placeholder text in ${status.placeholders.map((p) => p.field).join(', ')}`);
-  problems.push(...misusedQuotesIn(`${message.subject ?? ''}\n${message.body}`, status.usable));
+  // Subject and body separately — a quote mark in one must never pair with one in the other.
+  problems.push(...misusedQuotesIn(message.subject ?? '', status.usable).map((p) => `subject: ${p}`));
+  problems.push(...misusedQuotesIn(message.body, status.usable));
 
   // Name, count, sign-off, honesty, no claims of existing work.
   problems.push(...greetingProblems(message.body, creator.displayName, creator.handle));

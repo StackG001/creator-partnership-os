@@ -97,13 +97,21 @@ export function describeAuthor(q: Pick<Quote, 'authorType' | 'authorHandle'>): s
 // --- quotes inside a draft ---------------------------------------------------------------
 
 // Straight, curly and «guillemet» quotes all count — a draft can't dodge the check by switching marks.
-const QUOTED_SPAN = /["\u201C\u00AB\u201E]([^"\u201C\u201D\u00AB\u00BB\u201E]{12,}?)["\u201D\u00BB\u201C]/g;
+// Paired marks (“…”, «…», „…“) are read first and may contain straight quotes — a comment that itself
+// says "how to" is quoted as “You need to put together a "how to" guide…”. Straight "…" pairs are
+// then read from what's left, so the inner marks are never mistaken for the end of the quote.
+const PAIRED_SPAN = /\u201C([^\u201C\u201D]{4,}?)\u201D|\u00AB([^\u00AB\u00BB]{4,}?)\u00BB|\u201E([^\u201E\u201C\u201D]{4,}?)[\u201C\u201D]/g;
+const STRAIGHT_SPAN = /"([^"\u201C\u201D\u00AB\u00BB]{4,}?)"/g;
 
-/** Quoted spans of 3+ words in a message — what counts as quoting someone. */
+/** Quoted spans of 2+ words in a message — what counts as quoting someone (a lone word like 'yes' does not). */
 export function quotedSpansIn(text: string): string[] {
-  return [...text.matchAll(QUOTED_SPAN)]
-    .map(([, span]) => span ?? '')
-    .filter((span) => span.trim().split(/\s+/).length >= 3);
+  const spans: string[] = [];
+  const rest = text.replace(PAIRED_SPAN, (_m, a, b, c) => {
+    spans.push(a ?? b ?? c ?? '');
+    return ' ';
+  });
+  for (const [, span] of rest.matchAll(STRAIGHT_SPAN)) spans.push(span ?? '');
+  return spans.filter((span) => span.trim().split(/\s+/).length >= 2);
 }
 
 /**
@@ -121,12 +129,18 @@ export function misusedQuotesIn(text: string, usable: Quote[]): string[] {
       );
       continue;
     }
+    // Every cut must be marked where it happens: a quote that starts after the
+    // comment's start opens with "…", one that stops before its end closes with "…"
+    // (cuts in the middle are marked by construction — that's where it was split).
     const full = normalizeQuoteText(match.fullText ?? match.text);
-    const presentedWhole = normalizeQuoteText(span) === full;
-    if (!presentedWhole && !ELLIPSIS.test(span)) {
-      issues.push(
-        `"${span}" is only part of the original ${match.authorType === 'FOLLOWER_COMMENT' ? 'comment' : 'caption'} — mark the cut with "…" inside the quotation marks so it isn't presented as the full text`,
-      );
+    const quoted = normalizeQuoteText(span);
+    const pieces = quoted.split(ELLIPSIS).filter(Boolean);
+    const kind = match.authorType === 'FOLLOWER_COMMENT' ? 'comment' : 'caption';
+    if (pieces.length && !full.startsWith(pieces[0]!) && !/^(?:…|\.\.\.)/.test(quoted)) {
+      issues.push(`"${span}" starts partway through the original ${kind} — open the quote with "…" to mark the cut`);
+    }
+    if (pieces.length && !full.endsWith(pieces[pieces.length - 1]!) && !/(?:…|\.\.\.)$/.test(quoted)) {
+      issues.push(`"${span}" stops before the end of the original ${kind} — close the quote with "…" to mark the cut, so it isn't presented as the full text`);
     }
   }
   return issues;

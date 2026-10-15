@@ -388,8 +388,10 @@ async function runPlatform(platform: PipelinePlatform): Promise<RunDetails & { a
     await chargeAudit(creator.sourceId, cost);
   }
 
-  // --- 4. draft seq 1 for audited creators with no messages yet — email when we have one ---
-  for (const creator of await prisma.creator.findMany({ where: { ...ours, status: 'AUDITED', messages: { none: {} } } })) {
+  // --- 4. draft seq 1 for audited creators with no live messages yet — email when we have one ---
+  // (Cancelled/superseded messages never went out — a rediscovered creator still gets a first touch.)
+  const live = { status: { notIn: ['CANCELLED', 'SUPERSEDED'] } };
+  for (const creator of await prisma.creator.findMany({ where: { ...ours, status: 'AUDITED', messages: { none: live } } })) {
     const l = line(creator);
     l.audited = true;
     if (!creator.businessEmail && !creator.contactEmail) await tryFindEmail(creator).catch(() => null);

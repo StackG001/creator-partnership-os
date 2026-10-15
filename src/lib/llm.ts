@@ -194,11 +194,24 @@ async function trace(label: string, payload: unknown): Promise<void> {
   }
 }
 
+// Half of an emoji (a lone UTF-16 surrogate, e.g. from .slice() cutting a
+// caption mid-character) makes the request body invalid JSON for the API.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+function scrub<T>(value: T): T {
+  if (typeof value === 'string') return value.replace(LONE_SURROGATE, '') as T;
+  if (Array.isArray(value)) return value.map(scrub) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrub(v)])) as T;
+  }
+  return value;
+}
+
 /** Streaming under the hood: long product-writing calls would otherwise time out. */
 async function send(
   params: Anthropic.MessageCreateParamsNonStreaming,
 ): Promise<Anthropic.Message> {
-  return anthropic().messages.stream(params).finalMessage();
+  return anthropic().messages.stream(scrub(params)).finalMessage();
 }
 
 /** Plain text completion. Use completeJSON whenever the output has a shape. */
