@@ -237,8 +237,9 @@ Plan, monthly limit, cycle dates and usage are **read live** from
   (`src/lib/sources/apify.ts`); never call Apify any other way.
 - **Run size grows, runs don't multiply:** audits per run = ceiling ÷ cost of
   one qualified creator (audit + stage-1 profiles). Unspent budget raises the
-  next day's ceiling. Cost basis: the `INSTAGRAM_AUDIT` result count × price until 3 live runs,
-  then measured averages (`PipelineRun`). After the 3rd live run the daily
+  next day's ceiling. Cost basis: the `INSTAGRAM_AUDIT` result count × price until 3 live runs
+  at the current audit depth, then measured averages (`PipelineRun`) — per-audit cost only
+  counts runs since `PIPELINE.instagram.auditCostSince` (2026-10-16, the 8-post depth). After the 3rd live run the daily
   summary reports real cost per run vs $0.36 and per qualified creator.
 - **Two stages.** Stage 1 is profile-only (followers, bio, link-in-bio, latest
   posts; ~1 result per profile) plus a free fetch of the link-in-bio page. Drop

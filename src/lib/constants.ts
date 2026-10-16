@@ -313,5 +313,11 @@ export const PIPELINE = {
     maxAuditsPerRun: 10,
     /** Measured runs needed before sizing switches from the estimate to real averages. */
     measuredRunsBeforeResize: 3,
+    /**
+     * Per-audit cost is averaged only over runs on or after this day (PipelineRun.day) —
+     * INSTAGRAM_AUDIT went from 3 to 8 comment posts on 2026-10-16, so older audits
+     * ($0.17) would undersize the ceiling check. Until 3 runs since then, the formula is used.
+     */
+    auditCostSince: '2026-10-16',
   },
 } as const;

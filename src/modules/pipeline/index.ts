@@ -68,8 +68,8 @@ const log = createLogger('pipeline');
 //                            ceiling is what's left of 80% of the plan ÷ the
 //                            run days left; its size (audits) is that ceiling
 //                            ÷ the cost of one qualified creator — the
-//                            estimate until 3 runs are measured, then the
-//                            measured average. Unused budget rolls into the
+//                            estimate until 3 runs at the current audit depth
+//                            are measured, then that average. Unused budget rolls into the
 //                            next run's ceiling, so runs grow, not multiply.
 //                            Then follow-ups, sends, summary.
 //
@@ -148,17 +148,29 @@ export async function sizeInstagramRun(): Promise<InstagramSizing> {
   // Until runs are measured, an audit costs what INSTAGRAM_AUDIT's result count says.
   let auditUsd: number = auditFormulaUsd;
   let profilesPerQualified: number = PIPELINE.instagram.estimate.profilesPerQualified;
-  let basis = `INSTAGRAM_AUDIT formula ($${auditUsd.toFixed(3)} per audit = ${INSTAGRAM_AUDIT_RESULTS} results) and ${profilesPerQualified} profiles checked per qualified creator (estimate)`;
-  if (measured.length >= PIPELINE.instagram.measuredRunsBeforeResize) {
-    const d = (r: (typeof measured)[number]) => (r.details ?? {}) as { auditSpentMicros?: number };
-    const audits = measured.reduce((n, r) => n + r.audits, 0);
-    const auditSpent = measured.reduce((n, r) => n + (d(r).auditSpentMicros ?? 0), 0);
+  // Audit cost only from runs at the current INSTAGRAM_AUDIT depth; stage-1 profiles don't depend on it.
+  const since = PIPELINE.instagram.auditCostSince;
+  const atDepth = measured.filter((r) => r.day >= since);
+  const enough = PIPELINE.instagram.measuredRunsBeforeResize;
+  const parts: string[] = [];
+  if (atDepth.length >= enough) {
+    const d = (r: (typeof atDepth)[number]) => (r.details ?? {}) as { auditSpentMicros?: number };
+    const audits = atDepth.reduce((n, r) => n + r.audits, 0);
+    const auditSpent = atDepth.reduce((n, r) => n + (d(r).auditSpentMicros ?? 0), 0);
+    if (audits) auditUsd = auditSpent / audits / MICRO;
+    parts.push(audits ? `$${auditUsd.toFixed(3)} per audit measured over ${atDepth.length} runs since ${since}` : `$${auditUsd.toFixed(3)} per audit (formula — no audits since ${since} yet)`);
+  } else {
+    parts.push(`$${auditUsd.toFixed(3)} per audit from the INSTAGRAM_AUDIT formula (${INSTAGRAM_AUDIT_RESULTS} results; ${atDepth.length}/${enough} runs since ${since})`);
+  }
+  if (measured.length >= enough) {
     const profiles = measured.reduce((n, r) => n + r.profilesChecked, 0);
     const added = measured.reduce((n, r) => n + r.added, 0);
-    if (audits) auditUsd = auditSpent / audits / MICRO;
     if (added) profilesPerQualified = profiles / added;
-    basis = `measured over the last ${measured.length} runs ($${auditUsd.toFixed(3)} per audit, ${profilesPerQualified.toFixed(1)} profiles per qualified creator)`;
+    parts.push(`${profilesPerQualified.toFixed(1)} profiles per qualified creator measured over the last ${measured.length} runs`);
+  } else {
+    parts.push(`${profilesPerQualified} profiles checked per qualified creator (estimate)`);
   }
+  const basis = parts.join(', ');
   const costPerQualifiedUsd = auditUsd + profilesPerQualified * price;
   const audits = Math.max(0, Math.min(PIPELINE.instagram.maxAuditsPerRun, Math.floor(runBudgetUsd / costPerQualifiedUsd)));
   return {
@@ -892,7 +904,7 @@ export async function dryRunDaily(): Promise<string> {
   out.push(`- $${s.pricePerResultUsd}/result · ${s.runsLeft} Instagram run days left (daily at 10:00) · per-run hard ceiling **$${s.runBudgetUsd.toFixed(2)}**`);
   out.push('');
   out.push('## Run size and projected spend');
-  out.push(`- One qualified creator ≈ $${s.costPerQualifiedUsd.toFixed(2)}: audit $${s.auditUsd.toFixed(2)} (${s.basis}; the INSTAGRAM_AUDIT formula says $${s.auditFormulaUsd.toFixed(2)}) + ${s.profilesPerQualified} stage-1 profiles × $${s.pricePerResultUsd}`);
+  out.push(`- One qualified creator ≈ $${s.costPerQualifiedUsd.toFixed(2)}: audit $${s.auditUsd.toFixed(2)} (${s.basis}; the INSTAGRAM_AUDIT formula says $${s.auditFormulaUsd.toFixed(2)}) + ${s.profilesPerQualified.toFixed(1)} stage-1 profiles × $${s.pricePerResultUsd}`);
   out.push(`- **Per run: ${s.audits} paid audit(s)** (discovery up to $${s.discoveryBudgetUsd.toFixed(2)}, up to ${s.audits * 2} new creators) ≈ **$${(s.audits * s.costPerQualifiedUsd).toFixed(2)}**`);
   const perRun = s.audits * s.costPerQualifiedUsd;
   out.push(`- **Projected this cycle:** ≈ $${Math.min(s.leftUsd, perRun * s.runsLeft).toFixed(2)} over ${s.runsLeft} runs (≈ ${s.audits * s.runsLeft} audited creators), never past $${s.stopAtUsd}. Unspent share rolls into the next day's ceiling, so a quiet day makes the next run bigger.`);
