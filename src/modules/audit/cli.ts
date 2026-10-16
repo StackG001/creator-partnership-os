@@ -32,7 +32,8 @@ await runCli(spec, async (ctx) => {
     return;
   }
 
-  ctx.log.info(`audited @${result.handle} · opportunity score ${result.opportunityScore}/100`);
+  ctx.log.info(`audited @${result.handle} · opportunity score ${result.opportunityScore}/100 · ${result.goldmineSignals} goldmine signal(s)`);
+  if (result.lowProductFit) ctx.log.warn(`  low product-fit — disqualified, outreach not recommended`);
   for (const angle of result.productAngles) {
     ctx.log.info(`  - ${angle.title} (${Math.round(angle.confidence * 100)}%): ${angle.promise}`);
   }

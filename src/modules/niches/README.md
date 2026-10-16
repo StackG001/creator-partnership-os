@@ -1,6 +1,6 @@
 # niches
 
-The niche library — no niche is off limits. See CLAUDE.md, "Niches: no limits".
+The niche library — any niche where the audience learns a skill and gets stuck; entertainment/lifestyle niches are rejected in code. See CLAUDE.md, "Niches: any skill, never entertainment".
 
 ```
 npm run niches                         # the library: status, qualified, spend, cost per qualified

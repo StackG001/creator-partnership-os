@@ -155,15 +155,15 @@ export const APIFY = {
 
 /**
  * Instagram audit depth — the paid stage, only for creators who passed the
- * free/cheap stage-1 checks. Profile (1 result) + posts + comments on the top 3
+ * free/cheap stage-1 checks. Profile (1 result) + posts + comments on the top 8
  * posts by comment count (that's where the audience asks for things).
- * Cut 2026-10-15 from 6×25 comments (169 results ≈ $0.39) to 3×20:
- * 1 + 18 + 3×20 = 79 results ≈ $0.18 at the Starter-tier $0.0023/result.
- * Raise commentsPerPost if audits start coming back without a sourced audience quote.
+ * Raised 2026-10-16 from 3×20 (79 results ≈ $0.18) to 8×20 so audits see a
+ * problem repeat across posts, closer to YouTube's 300-comment depth:
+ * 1 + 18 + 8×20 = 179 results ≈ $0.41 at the Starter-tier $0.0023/result.
  */
 export const INSTAGRAM_AUDIT = {
   posts: 18,
-  commentPosts: 3,
+  commentPosts: 8,
   commentsPerPost: 20,
 } as const;
 
@@ -195,12 +195,59 @@ export type NicheStatus = (typeof NICHE_STATUSES)[number];
  * questions. These categories only steer the weekly generator — it invents
  * niches and sub-niches inside and beyond them.
  */
+/**
+ * The one test every niche must pass: the audience is LEARNING A SKILL and
+ * getting STUCK — not watching for entertainment, lifestyle or inspiration.
+ */
+export const NICHE_SKILL_TEST =
+  'Would a beginner in this niche search YouTube for help when something goes wrong? If yes, accept. If no, reject.';
+
+/**
+ * Hard reject: niches whose audience is mainly watching for entertainment,
+ * lifestyle or inspiration. Checked in code against a niche's name, category
+ * and search terms — when generated and again before any search runs — and
+ * given to the generator. Not exhaustive: the generator also applies
+ * NICHE_SKILL_TEST to anything similar.
+ */
+export const NICHE_REJECT: ReadonlyArray<{ type: string; match: RegExp }> = [
+  { type: 'Van life, travel vlogs, couple vlogs, solo travel diaries', match: /\bvan ?life\b|\brv life\b|\bfull[- ]time rv\b|\btravel (vlog|diar|stor)|\bcouples? vlog|\bsolo (female )?(travel|touring|trip)|\bmotorcycle touring\b|\bdigital nomad|\broad ?trip|\bbackpacking (vlog|diar|stor)/i },
+  { type: 'Fitness motivation, gym transformation, body progress vlogs', match: /\bfitness motivation|\bgym (motivation|transformation|vlog)|\b(body|fitness|weight ?loss) (transformation|progress)|\bbody progress\b/i },
+  { type: 'Day-in-my-life, morning routine lifestyle', match: /\bday in (my|the) life\b|\bditl\b|\bmorning routine\b|\bnight routine\b|\blifestyle vlog|\bthat girl\b|\baesthetic routine/i },
+  { type: 'Storytime, reaction videos, commentary channels', match: /\bstory ?time\b|\breaction (video|channel)s?\b|\breacts?\b|\breacting to\b|\bcommentary\b|\bdrama (channel|recap)/i },
+  { type: 'Music performance, comedy skits', match: /\bmusic performance|\bcover songs?\b|\bsinging covers?\b|\blive performance|\bcomedy\b|\bskits?\b|\bprank/i },
+  { type: 'Relationship advice vlogs, dating life content', match: /\brelationship (advice|vlog|goals)|\bdating (life|advice|vlog|stor)|\bcouple goals\b/i },
+  { type: 'Food review channels (eating food, not making it)', match: /\bfood review|\brestaurant review|\bmukbang\b|\btaste test|\beating (show|challenge)|\bfast food review/i },
+  { type: 'Vlogs of any kind (watching someone live, not learning a skill)', match: /\bvlogs?\b|\bvlogging\b/i },
+];
+
+/** Which reject type a niche/term falls under, or null if it may run. */
+export function nicheRejectReason(text: string): string | null {
+  return NICHE_REJECT.find((r) => r.match.test(text))?.type ?? null;
+}
+
+/**
+ * Approved directions for the generator — a starting point, NOT a limit. Any
+ * niche in any category passes if NICHE_SKILL_TEST does (woodworking, pottery,
+ * aquarium keeping, calligraphy, beekeeping, car detailing, electronics repair,
+ * dog training, horse care, amateur astronomy…).
+ */
+export const NICHE_APPROVED_EXAMPLES: Readonly<Record<string, readonly string[]>> = {
+  'Food & Fermentation': ['sourdough bread baking', 'kombucha brewing', 'home cheesemaking', 'kimchi and fermentation', 'cake decorating for beginners', 'fresh pasta from scratch', 'home canning and preserving', 'bread baking troubleshooting'],
+  'Plants & Growing': ['houseplant care for beginners', 'succulent propagation', 'bonsai for beginners', 'vegetable gardening from seed', 'hydroponics at home', 'composting', 'orchid care and reblooming'],
+  'Hair & Beauty': ['4c natural hair care', 'loc maintenance and growth', 'twist-out techniques', 'curly hair method (CGM)', 'DIY hair growth routines', 'skincare for eczema-prone skin', 'hyperpigmentation treatments', 'acne skincare routines'],
+  'Crafts & Making': ['watercolour painting for beginners', 'embroidery and cross-stitch', 'crochet for beginners', 'knitting for beginners', 'leather crafting', 'soy candle making', 'resin art', 'sewing for beginners', 'macramé'],
+  'Music & Language': ['fingerstyle guitar for beginners', 'self-teaching piano', 'music production and beat making', 'learning Korean for beginners', 'learning Japanese for beginners', 'learning Arabic for beginners', 'accent reduction'],
+  'Health & Body': ['posture correction exercises', 'pelvic floor recovery', 'managing PCOS naturally', 'hypothyroid diet and lifestyle', 'IBS management', 'meal prep for specific diets'],
+  'Home & Finance': ['cash envelope budgeting', 'sinking fund system', 'credit score repair', 'thrift store flipping', 'home organization methods', 'decluttering systems'],
+  'Tech Skills': ['Notion setup for beginners', 'Excel for non-technical people', 'CapCut video editing', 'DaVinci Resolve for beginners', 'Procreate digital art', '3D printing troubleshooting'],
+};
+
 export const NICHE_LIBRARY = {
+  /** Directions, not limits — every category is a place people learn a skill and get stuck. */
   categories: [
-    'cooking', 'baking', 'budgeting', 'parenting', 'relationships', 'fitness', 'health conditions',
-    'mental wellness', 'personal finance', 'crafts', 'gardening', 'pets', 'beauty', 'hair care', 'skin care',
-    'fashion', 'home & cleaning', 'careers', 'study', 'languages', 'faith', 'travel', 'cars', 'DIY',
-    'small business', 'hobbies', 'disability & chronic illness life', 'life situations', 'outdoors', 'music',
+    ...Object.keys(NICHE_APPROVED_EXAMPLES),
+    'woodworking & DIY', 'pottery & ceramics', 'pets & animal training', 'cars & repair', 'electronics',
+    'outdoors skills', 'study skills', 'small business skills', 'parenting skills', 'hobbies',
   ],
   /** New niches the weekly generator adds. */
   newNichesPerWeek: 24,

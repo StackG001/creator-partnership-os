@@ -65,6 +65,15 @@ repeated questions, "please teach this", "where's the recipe"…).
   opportunity is already there** (their audience is asking for it) **and that
   we have the technical ability to do all the work** — so they never worry
   about it and just focus on creating content to promote the product.
+- **Goldmine filter (audit).** Only comments that pass the Goldmine Test are
+  extracted (5 signal types, 3 product-opportunity tests — see
+  `src/modules/audit/README.md`). 3-8 per creator; fewer than 3 sourced
+  signals → low product-fit, `DISQUALIFIED`, no outreach. 3+ different
+  commenters with the same underlying problem = one recurring signal; self-blame
+  phrasing ("what am I doing wrong") counts as shame. Product scores are capped
+  by how many posts/commenters the problem reaches (5+ = a product), except a
+  **creator-validated** signal (matches one of their top-performing posts —
+  the Grant Bakes 9-to-5 pattern), which is the strongest signal.
 
 ## Outreach sequence design (permanent)
 
@@ -108,10 +117,16 @@ in code before anything can send (`sendChecks`, `npm run outreach -- --check <id
 - A comment the creator wrote themself (their own reply) is their words, not
   the audience's — stored as `CREATOR_CAPTION`, never as a follower comment.
 
-## Niches: no limits (permanent)
+## Niches: any skill, never entertainment (permanent)
 
-We are not limited to any niche — anywhere creators teach, show or struggle
-with something and their audience asks questions. The **niche library**
+Any niche in any category — **as long as the audience is learning a skill and
+getting stuck.** One test (`NICHE_SKILL_TEST`): "Would a beginner in this niche
+search YouTube for help when something goes wrong?" No → rejected. Van life,
+travel/couple vlogs, fitness motivation, day-in-my-life, storytime/reaction,
+music performance/comedy, dating vlogs and food review channels are
+hard-rejected in code (`NICHE_REJECT` in `src/lib/constants.ts`) when niches
+are generated and again before any search runs. `NICHE_APPROVED_EXAMPLES` are
+directions, not limits. The **niche library**
 (`Niche` table, `src/modules/niches`, `npm run niches`) holds every niche and
 its search terms (YouTube keyword + "how do I…" phrase, Instagram keyword +
 problem hashtag, and a SIMILAR_TO search for every Instagram creator who
@@ -230,9 +245,9 @@ Plan, monthly limit, cycle dates and usage are **read live** from
   anyone outside 10k–200k, brands/businesses (`IG_BRAND_CATEGORIES`), coaches
   selling services, and anyone whose bio or link-in-bio already sells a
   course/ebook/guide/paid product. Only survivors get the paid stage-2 audit:
-  posts + comments from the **top 3 posts by comment count, 20 comments each**
-  (`INSTAGRAM_AUDIT`, ≈ $0.18/audit since 2026-10-15; was 6×25 ≈ $0.39). Raise
-  `commentsPerPost` only if audits stop finding a sourced audience quote.
+  posts + comments from the **top 8 posts by comment count, 20 comments each**
+  (`INSTAGRAM_AUDIT`, ≈ $0.41/audit since 2026-10-16; was 3×20 ≈ $0.18, which
+  was too thin to see a problem repeat across posts).
 - **YouTube is free:** up to 20 new creators/day (`PIPELINE.dailyNewCreatorCap`)
   across the niche library, same 70/30 split.
 - **Discovery = Google first (IG_GOOGLE):** Serper searches `site:instagram.com

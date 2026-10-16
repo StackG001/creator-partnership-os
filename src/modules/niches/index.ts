@@ -4,7 +4,16 @@ import { prisma } from '../../lib/db.js';
 import { completeJSON } from '../../lib/llm.js';
 import { createLogger } from '../../lib/logger.js';
 import { isSensitiveNiche } from '../../lib/productLine.js';
-import { LEGACY_NICHES, NICHE_LIBRARY, PIPELINE, type NicheOrigin } from '../../lib/constants.js';
+import {
+  LEGACY_NICHES,
+  NICHE_APPROVED_EXAMPLES,
+  NICHE_LIBRARY,
+  NICHE_REJECT,
+  NICHE_SKILL_TEST,
+  nicheRejectReason,
+  PIPELINE,
+  type NicheOrigin,
+} from '../../lib/constants.js';
 
 const log = createLogger('niches');
 
@@ -85,8 +94,10 @@ const GeneratedSchema = z.object({
       origin: z.enum(['GENERATED', 'PROVEN']).describe('PROVEN when it comes straight from a niche that already produced qualified creators; otherwise GENERATED.'),
       sensitive: z.boolean().describe('True for health, medical conditions, mental health, or money/finance.'),
       why: z.string().describe('One line: what the audience in this niche keeps asking or struggling with.'),
+      stuckWhen: z.string().describe('The specific thing that goes wrong that makes a beginner search YouTube for help, e.g. "starter stops rising after day 4".'),
+      passesSkillTest: z.boolean().describe(`${NICHE_SKILL_TEST} True only if the audience is learning a skill and getting stuck.`),
       keyword: z.string().describe('2-4 word YouTube search for channels in this niche (no "how", no #).'),
-      igKeyword: z.string().describe('1-2 word Instagram account search for this niche (Instagram only matches short words in names/handles), e.g. "vanlife", "sourdough", "crochet".'),
+      igKeyword: z.string().describe('1-2 word Instagram account search for this niche (Instagram only matches short words in names/handles), e.g. "sourdough", "crochet", "bonsai".'),
       howDoI: z.string().describe('A real "how do I…" / "how to…" phrase this audience types into YouTube.'),
       hashtag: z.string().describe('One Instagram problem hashtag people in this niche use, without the #, lowercase, no spaces.'),
     }),
@@ -129,8 +140,13 @@ export async function generateNiches(count: number = NICHE_LIBRARY.newNichesPerW
   const { data } = await completeJSON({
     system: [
       'You build the niche library for Creator Partnership OS, which finds micro-creators (10k-200k followers) whose audience keeps asking them questions, then builds the creator a digital product for a revenue share.',
-      'No niche is off limits: anywhere creators teach, show or struggle with something and their audience asks questions — every hobby, life situation, condition, skill, job, place and identity.',
-      'Go specific: sub-niches beat broad niches ("sourdough for people with celiac", "budgeting as a single dad", "crochet for left-handers", "vanlife with dogs"). Spread across many different categories; do not cluster.',
+      'ACCEPT only niches where people are LEARNING A SKILL and getting STUCK. Apply this single test to every niche before returning it:',
+      `  ${NICHE_SKILL_TEST}`,
+      'REJECT any niche where the audience is primarily watching for entertainment, lifestyle or inspiration rather than learning a skill — these types and anything similar:',
+      ...NICHE_REJECT.map((r) => `  - ${r.type}`),
+      'Full freedom beyond that: any niche in any category is valid as long as the audience is actively trying to learn and failing — woodworking, pottery, aquarium keeping, calligraphy, beekeeping, car detailing, electronics repair, dog training, horse care, amateur astronomy and far more. The examples given are directions, not limits.',
+      'Prioritise niches with high comment engagement around specific problems (things going wrong at a specific step), not just high view counts.',
+      'Go specific: sub-niches beat broad niches ("sourdough for people with celiac", "budgeting as a single dad", "crochet for left-handers", "bonsai for apartment growers"). Spread across many different categories; do not cluster.',
       `About a third should be PROVEN: sub-niches and neighbours of the niches that already produced qualified creators (given below). The rest GENERATED: new territory.`,
       'Health, medical, mental-health and finance niches are welcome (mark sensitive: true) — their products will only ever be lifestyle/experience guides from the creator\'s own routines.',
       'Never repeat an existing or retired niche, even reworded.',
@@ -139,6 +155,9 @@ export async function generateNiches(count: number = NICHE_LIBRARY.newNichesPerW
     ].join('\n'),
     prompt: [
       `Categories to cover (and go beyond): ${NICHE_LIBRARY.categories.join(', ')}`,
+      '',
+      'Approved niche examples (a starting point — expand freely beyond these):',
+      ...Object.entries(NICHE_APPROVED_EXAMPLES).map(([cat, list]) => `- ${cat}: ${list.join(', ')}`),
       '',
       `Niches that produced qualified creators: ${producing.join('; ') || 'none yet'}`,
       `Areas where creators already qualified (from audits): ${[...new Set(proven.map((p) => p.niche!.slice(0, 120)))].join(' | ') || 'none'}`,
@@ -156,11 +175,19 @@ export async function generateNiches(count: number = NICHE_LIBRARY.newNichesPerW
   const known = new Set(existing.map((n) => n.name.toLowerCase()));
   for (const g of data.niches) {
     if (known.has(g.name.toLowerCase())) continue;
+    // Hard filter: entertainment/lifestyle audiences don't buy a fix — they aren't stuck.
+    const rejected = g.passesSkillTest
+      ? nicheRejectReason([g.name, g.category, g.keyword, g.igKeyword, g.howDoI, g.hashtag].join(' | '))
+      : 'fails the skill-learner test';
+    if (rejected) {
+      log.warn(`rejected niche "${g.name}": ${rejected}`);
+      continue;
+    }
     known.add(g.name.toLowerCase());
     const parent = g.parent ? await prisma.niche.findUnique({ where: { name: g.parent } }) : null;
     const sensitive = g.sensitive || isSensitiveNiche(`${g.name} ${g.category}`);
     const niche = await prisma.niche.create({
-      data: { name: g.name, category: g.category, parentId: parent?.id ?? null, origin: g.origin, sensitive, notes: g.why },
+      data: { name: g.name, category: g.category, parentId: parent?.id ?? null, origin: g.origin, sensitive, notes: `${g.why} · stuck when: ${g.stuckWhen}` },
     });
     const hashtag = g.hashtag.replace(/^#/, '').replace(/\s+/g, '').toLowerCase();
     const terms: Array<{ platform: SearchPlatform; kind: string; query: string }> = [
@@ -274,6 +301,8 @@ export async function pickSearches(
     (s) =>
       s.nicheRef?.status !== 'RETIRED' &&
       !options.exclude?.has(s.id) &&
+      // Hard filter, also for niches added before it existed: entertainment/lifestyle niches never run.
+      !nicheRejectReason([s.nicheRef?.name ?? s.niche ?? '', s.nicheRef?.category ?? '', s.query].join(' | ')) &&
       // Instagram account search only matches short words — longer keyword searches return nothing.
       !(s.kind === 'IG_SEARCH' && !isShortIgKeyword(s.query)),
   );

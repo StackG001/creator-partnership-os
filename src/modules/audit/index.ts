@@ -69,6 +69,8 @@ export interface AuditResult {
   handle: string;
   auditId: string;
   opportunityScore: number;
+  goldmineSignals: number;
+  lowProductFit: boolean;
   productAngles: Array<{ title: string; promise: string; confidence: number }>;
   artifactPath: string;
   socialLinks: SocialLinks;
@@ -76,17 +78,71 @@ export interface AuditResult {
 
 // --- zod schemas: extraction (pass 1, per chunk) ----------------------------
 
+// The Goldmine filter: only comments revealing a hidden problem worth a digital
+// product are extracted — never generic complaints or one-off frustrations.
+export const GOLDMINE_SIGNAL_TYPES = [
+  'RECURRING_UNANSWERED_QUESTION',
+  'TRIED_EVERYTHING',
+  'TRANSFORMATION_REQUEST',
+  'SHAME_OR_EMBARRASSMENT',
+  'WISH_SOMEONE_TOLD_ME',
+] as const;
+
+/** Fewer goldmine signals than this → low product-fit, no outreach. */
+export const GOLDMINE_MIN = 3;
+export const GOLDMINE_MAX = 8;
+
+const PRODUCT_FORMATS = ['guide', 'planner', 'checklist', 'system', 'course module'] as const;
+
+const GOLDMINE_FILTER = [
+  'WHAT TO EXTRACT — THE GOLDMINE FILTER:',
+  'Do NOT extract generic complaints, questions about products, or one-off frustrations. Only extract comments that pass the Goldmine Test — a hidden problem worth a digital product.',
+  'Look specifically for these 5 signal types:',
+  '1. RECURRING_UNANSWERED_QUESTION — a question that appears across multiple posts/videos that the creator\'s content never fully resolves. The creator keeps teaching but the same confusion keeps coming back. Note the question AND every post it repeats on. Example signal: "I\'ve watched all your videos and I still don\'t understand why my [X] isn\'t working".',
+  '   Count this signal if 3 or more different commenters describe the same struggle or ask the same question — even if the exact words differ. A cluster of "confused / gave up / threw it out" comments about the same step counts as one strong recurring signal with multiple askers. Do NOT require the exact same wording — look for the same underlying problem. Record how many different commenters it covers in askerCount.',
+  '2. TRIED_EVERYTHING — someone who has already spent time, money or effort trying to solve this and failed. A proven buyer who will pay again for something that actually works. Key phrases: "I\'ve tried everything", "nothing works for me", "I followed all the steps and still", "I bought [product] and it didn\'t help".',
+  '3. TRANSFORMATION_REQUEST — someone begging for a packaged version of what the creator gives away in fragments: a plan, schedule, system, routine, checklist or step-by-step guide. Key phrases: "Can you make a full routine for", "I wish you had a plan for", "someone needs to make a guide for", "do you have a programme for".',
+  '4. SHAME_OR_EMBARRASSMENT — comments revealing a problem people are embarrassed about, things they wouldn\'t say on most channels but trust this creator enough to admit. High emotional charge = high willingness to pay. Examples: hair loss, debt, relationship failure, health struggles, parenting shame, body image.',
+  '   Also count self-blame phrasing regardless of topic — the person blames themself for being stuck: "I feel stupid", "sorry if this is obvious", "am I the only one who", "what am I doing wrong", "I must be doing something wrong", "is this a dumb question", "don\'t judge me but", "embarrassed to ask".',
+  '5. WISH_SOMEONE_TOLD_ME — regret-based pain. They already paid the price of not knowing and will pay to shortcut it or finally fix it. Key phrases: "I wish I knew this earlier", "nobody tells you that", "I learned this the hard way", "if only I\'d found this sooner".',
+  '',
+  'CREATOR-VALIDATED ANGLE: If a goldmine signal directly matches the topic or title of one of the creator\'s top-performing videos (by likes or views), treat this as confirmed product demand. Boost that signal\'s priority score and flag it as creator_validated: true in the output. This is the strongest signal — the creator already proved the audience wants this content, the gap is a packaged product. Set validatedBy to the [Pn] of that top-performing post (it must be one listed under "Top-performing posts"); otherwise creator_validated: false and validatedBy: null.',
+  '',
+  'THE PRODUCT OPPORTUNITY TEST — score every signal against all three; include it ONLY if it passes all three:',
+  '✓ The audience has already paid money trying to solve it, or would obviously pay to solve it.',
+  '✓ The creator\'s free content does NOT fully solve it — there is a gap.',
+  '✓ It can be packaged into a system, guide, plan or framework — not just more information.',
+].join('\n');
+
+const GoldmineFields = {
+  signalType: z.enum(GOLDMINE_SIGNAL_TYPES),
+  pain: z.string().describe('one-line paraphrase of the hidden problem'),
+  quote: z.string().describe('exact comment, copied verbatim from the source text'),
+  source: z.enum(['comment', 'caption']),
+  postRef: z.string().describe('video/post reference: the [Pn] the quote came from'),
+  repeatPostRefs: z
+    .array(z.string())
+    .describe('every [Pn] where the same problem shows up, including postRef'),
+  whyItPasses: z
+    .string()
+    .describe('why it passes all three product-opportunity tests: paid/would pay, gap in free content, packageable'),
+  productFormat: z.enum(PRODUCT_FORMATS),
+  askerCount: z
+    .number()
+    .int()
+    .min(1)
+    .describe('how many different commenters describe this same underlying problem'),
+  creator_validated: z
+    .boolean()
+    .describe("true when the signal matches the topic/title of one of the creator's top-performing posts"),
+  validatedBy: z
+    .string()
+    .nullable()
+    .describe('the [Pn] of the matching top-performing post, or null'),
+};
+
 const ExtractionSchema = z.object({
-  painQuotes: z
-    .array(
-      z.object({
-        pain: z.string().describe('one-line paraphrase of the pain point'),
-        quote: z.string().describe('verbatim quote copied from the source text'),
-        source: z.enum(['comment', 'caption']),
-        postRef: z.string().describe('the [Pn] reference the quote came from'),
-      }),
-    )
-    .max(15),
+  goldmineSignals: z.array(z.object(GoldmineFields)).max(GOLDMINE_MAX),
   themes: z.array(z.string()).max(10),
   voiceSignals: z.object({
     toneAdjectives: z.array(z.string()).max(8),
@@ -119,12 +175,46 @@ const ProductOpportunitySchema = z.object({
   promise: z.string(),
   whoItsFor: z.string(),
   whyItFits: z.string(),
+  solvesSignals: z
+    .array(z.number().int().min(0))
+    .describe('indexes into goldmineSignals this product solves'),
   score: z.number().min(0).max(10),
   priceBand: z.string(),
   recommended: z.boolean(),
 });
 
-const SynthesisSchema = z
+/**
+ * Score ceiling for a product, from how widely its goldmine signals repeat:
+ * a problem seen once is interesting, a problem seen across 5+ posts (or
+ * raised by 5+ different commenters) is a product. A creator-validated signal
+ * lifts the ceiling to 10 — the creator's own best content already proved it.
+ */
+export function repeatScoreCap(posts: number): number {
+  if (posts >= 5) return 10;
+  if (posts >= 3) return 8;
+  if (posts === 2) return 6.5;
+  if (posts === 1) return 5;
+  return 3;
+}
+
+function signalReach(signal: { postRef: string; repeatPostRefs: string[]; askerCount: number }): number {
+  return Math.max(new Set([signal.postRef, ...signal.repeatPostRefs]).size, signal.askerCount);
+}
+
+/** The creator's best posts by likes + 3×comments (the same weighting as bestPosts) — proof of what the audience wants. */
+function topPerformingPosts(posts: UnifiedPost[], n = 8): UnifiedPost[] {
+  return [...posts]
+    .sort((a, b) => b.likeCount + b.commentCount * 3 - (a.likeCount + a.commentCount * 3))
+    .slice(0, n);
+}
+
+function formatTopPosts(top: UnifiedPost[]): string {
+  return top
+    .map((p) => `[${p.ref}] ${p.likeCount} likes · ${p.commentCount} comments · ${p.caption.trim().split('\n')[0]!.slice(0, 140) || '(no caption)'}`)
+    .join('\n');
+}
+
+const synthesisSchema = (topRefs: Set<string>) => z
   .object({
     niche: z.string().describe('one sentence'),
     audiencePersona: z.object({
@@ -132,16 +222,14 @@ const SynthesisSchema = z
       situation: z.string(),
       triedAlready: z.string(),
     }),
-    top10Pains: z
+    goldmineSignals: z
       .array(
         z.object({
-          pain: z.string(),
-          quote: z.string().describe('verbatim, taken from the evidence provided'),
-          source: z.enum(['comment', 'caption']),
-          postRef: z.string(),
+          ...GoldmineFields,
+          quote: z.string().describe('verbatim, taken from the goldmine evidence provided'),
         }),
       )
-      .length(10),
+      .max(GOLDMINE_MAX),
     voiceGuide: z.object({
       toneAdjectives: z.array(z.string()).min(3).max(8),
       sentenceLength: z.string(),
@@ -158,10 +246,42 @@ const SynthesisSchema = z
   .refine((v) => v.productOpportunities.filter((p) => p.recommended).length === 1, {
     message: 'Exactly one productOpportunities entry must have recommended: true',
     path: ['productOpportunities'],
+  })
+  .superRefine((v, ctx) => {
+    v.productOpportunities.forEach((p, i) => {
+      const bad = p.solvesSignals.filter((n) => n >= v.goldmineSignals.length);
+      if (bad.length) {
+        ctx.addIssue({ code: 'custom', path: ['productOpportunities', i, 'solvesSignals'], message: `no goldmineSignals at index ${bad.join(', ')}` });
+        return;
+      }
+      const solved = p.solvesSignals.map((n) => v.goldmineSignals[n]!);
+      const reach = Math.max(0, ...solved.map(signalReach));
+      const cap = solved.some((g) => g.creator_validated) ? 10 : repeatScoreCap(reach);
+      if (p.score > cap) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['productOpportunities', i, 'score'],
+          message: `"${p.title}" scores ${p.score} but its best signal repeats on ${reach} post(s)/commenter(s) and none is creator-validated — max ${cap}`,
+        });
+      }
+    });
+    v.goldmineSignals.forEach((g, i) => {
+      if (g.creator_validated && (!g.validatedBy || !topRefs.has(g.validatedBy.replace(/[[\]]/g, '')))) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['goldmineSignals', i, 'validatedBy'],
+          message: `creator_validated needs validatedBy to be one of the top-performing posts (${[...topRefs].join(', ')})`,
+        });
+      }
+    });
   });
-type Synthesis = z.infer<typeof SynthesisSchema>;
+type Synthesis = z.infer<ReturnType<typeof synthesisSchema>>;
 
 export interface AuditReport extends Synthesis {
+  /** The goldmine quotes, in the shape outreach/product/funnel/quotes read. */
+  top10Pains: Array<{ pain: string; quote: string; source: 'comment' | 'caption'; postRef: string }>;
+  /** Fewer than GOLDMINE_MIN goldmine signals — outreach not recommended. */
+  lowProductFit: boolean;
   visualStyle: VisualStyle;
 }
 
@@ -317,16 +437,19 @@ async function runExtraction(
   chunk: UnifiedPost[],
   commentsByRef: Map<string, UnifiedComment[]>,
   niche: string,
+  topPosts: UnifiedPost[],
 ): Promise<Extraction> {
   const { data } = await completeJSON({
     system: [
       "You are a research analyst preparing a creator audit for Creator Partnership OS, an internal tool that finds micro-creators and builds them a done-for-you digital product.",
       'Extract evidence ONLY from the posts/comments given below. Never invent a quote — every "quote" must be copied verbatim from the caption or comment text provided.',
-      'painQuotes: real audience pain points, stated or clearly implied, each tied to the [Pn] post it came from.',
+      GOLDMINE_FILTER,
+      'goldmineSignals: only comments that pass the filter and all three tests, each tied to the [Pn] post it came from. Zero is a valid answer — never pad with weaker comments.',
+      'Top-performing posts are listed for the CREATOR-VALIDATED ANGLE check: their comments may sit in another batch, so match on topic/title.',
       'themes: recurring topics/content pillars.',
       'voiceSignals: how this creator actually writes — tone, sentence rhythm, recurring phrases, words they avoid, emoji habits, typical openers/closers.',
     ].join('\n'),
-    prompt: `Creator niche (approx): ${niche || 'unknown, infer from content'}\n\nPosts:\n\n${formatPostsBlock(chunk, commentsByRef)}`,
+    prompt: `Creator niche (approx): ${niche || 'unknown, infer from content'}\n\nTop-performing posts (by likes + comments, across the whole channel):\n${formatTopPosts(topPosts)}\n\nPosts:\n\n${formatPostsBlock(chunk, commentsByRef)}`,
     schema: ExtractionSchema,
     schemaName: 'extract_evidence',
     tier: 'default',
@@ -338,7 +461,7 @@ async function runExtraction(
 
 function mergeExtractions(chunks: Extraction[]): Extraction {
   return {
-    painQuotes: chunks.flatMap((c) => c.painQuotes),
+    goldmineSignals: chunks.flatMap((c) => c.goldmineSignals),
     themes: [...new Set(chunks.flatMap((c) => c.themes))],
     voiceSignals: {
       toneAdjectives: [...new Set(chunks.flatMap((c) => c.voiceSignals.toneAdjectives))],
@@ -387,17 +510,21 @@ async function runSynthesis(input: {
   platform: 'INSTAGRAM' | 'YOUTUBE';
   linkInBioText: string | null;
   evidence: Extraction;
+  topPosts: UnifiedPost[];
   sampleSize: number;
 }): Promise<Synthesis> {
-  const { profile, platform, linkInBioText, evidence, sampleSize } = input;
+  const { profile, platform, linkInBioText, evidence, topPosts, sampleSize } = input;
 
   const system = [
     'You are Gerald\'s research analyst at Creator Partnership OS.',
     'The system finds micro-creators (10k-200k followers, engaged niche audience, no digital product yet), audits them, writes them personalised outreach, and — if they agree to partner — builds them a 35-50 page research-backed digital product and funnel published on Whop with a revenue share.',
     'This audit is the evidence pack that everything downstream is built from: the pitch to the creator, the product angle, the product itself.',
-    'Ground every claim in the evidence given. top10Pains.quote must be copied verbatim from the painQuotes evidence (do not paraphrase into the quote field — paraphrase goes in "pain"). Pick and rank the strongest, most distinct 10; merge near-duplicates.',
+    'Ground every claim in the evidence given.',
+    GOLDMINE_FILTER,
+    `goldmineSignals: re-check every candidate from the evidence against the filter and all three tests, merge near-duplicates (union their repeatPostRefs and add up askerCount — a problem that shows up across several posts or from several commenters is ONE signal with every post listed), keep creator_validated/validatedBy only where the signal really matches a top-performing post,, and keep the strongest ${GOLDMINE_MIN}-${GOLDMINE_MAX}, creator-validated signals first, then strongest. quote must be copied verbatim from the evidence (do not paraphrase into the quote field — paraphrase goes in "pain"). If fewer than ${GOLDMINE_MIN} pass, return only those that do — never pad; the creator is then flagged low product-fit and gets no outreach.`,
     'hookLines must sound like this specific creator wrote them — use their real phrases, sentence rhythm and emoji habits from voiceGuide, not generic marketing copy.',
-    'productOpportunities: exactly 5 candidate digital products this creator could sell to this audience. Exactly one must have recommended: true — the one with the best score.',
+    'productOpportunities: exactly 5 candidate digital products this creator could sell to this audience, each listing the goldmineSignals (by index) it solves in solvesSignals. Exactly one must have recommended: true — the one with the best score.',
+    'Scoring weights heavily toward REPEAT OCCURRENCE: a problem that appears once is interesting, a problem that appears across 5+ posts/videos is a product. Reach = the larger of the number of distinct posts (postRef + repeatPostRefs) and askerCount, for the widest-reaching signal a product solves. Hard ceilings: reach 0 → 3, 1 → 5, 2 → 6.5, 3-4 → 8, 5+ → 10. A product solving a creator_validated signal has no ceiling below 10 and should be the recommended one unless another product clearly beats it. Within the ceiling, score higher for multiple signals solved and for TRIED_EVERYTHING / SHAME_OR_EMBARRASSMENT signals (proven willingness to pay).',
     `If the niche touches health, medical conditions, mental health or money: ${SENSITIVE_PRODUCT_RULE}`,
     'partnershipPitchAngle: the single sharpest insight to open outreach with — something that proves you actually looked at their content, not a template line.',
   ].join('\n');
@@ -414,8 +541,13 @@ async function runSynthesis(input: {
     '',
     `Voice signals:\n${JSON.stringify(evidence.voiceSignals, null, 2)}`,
     '',
-    `Pain point evidence (${evidence.painQuotes.length} quotes, each tagged with its source post ref):`,
-    ...evidence.painQuotes.map((q) => `- [${q.postRef}] (${q.source}) "${q.quote}" — ${q.pain}`),
+    `Top-performing posts (by likes + comments) — the CREATOR-VALIDATED ANGLE check uses these:\n${formatTopPosts(topPosts)}`,
+    '',
+    `Goldmine evidence (${evidence.goldmineSignals.length} candidate signals, each tagged with its source post ref and the posts it repeats on):`,
+    ...evidence.goldmineSignals.map(
+      (q) =>
+        `- ${q.signalType} [${q.postRef}] (${q.source}) "${q.quote}" — ${q.pain} · repeats on: ${q.repeatPostRefs.join(', ') || q.postRef} · askers: ${q.askerCount} · creator_validated: ${q.creator_validated}${q.validatedBy ? ` (${q.validatedBy})` : ''} · format: ${q.productFormat} · test: ${q.whyItPasses}`,
+    ),
     '',
     `Sample size analysed: ${sampleSize} posts/videos.`,
   ].join('\n');
@@ -423,7 +555,7 @@ async function runSynthesis(input: {
   const { data } = await completeJSON({
     system,
     prompt,
-    schema: SynthesisSchema,
+    schema: synthesisSchema(new Set(topPosts.map((p) => p.ref))),
     schemaName: 'audit_report',
     tier: 'heavy',
     label: 'audit:synthesis',
@@ -470,11 +602,18 @@ function renderMarkdown(report: AuditReport, meta: {
   lines.push(`- Already tried: ${report.audiencePersona.triedAlready}`);
   lines.push('');
 
-  lines.push('## 2. Top 10 Pains');
+  lines.push('## 2. Goldmine Signals');
   lines.push('');
-  report.top10Pains.forEach((p, i) => {
-    lines.push(`${i + 1}. **${p.pain}**`);
-    lines.push(`   > "${p.quote}" — ${p.source} on [${p.postRef}]`);
+  if (report.lowProductFit) {
+    lines.push(`> ⚠️ **Low product-fit** — only ${report.goldmineSignals.length} signal(s) passed the Goldmine Test (minimum ${GOLDMINE_MIN}). Outreach not recommended.`);
+    lines.push('');
+  }
+  report.goldmineSignals.forEach((g, i) => {
+    lines.push(`${i + 1}. **${g.pain}** — ${g.signalType}${g.creator_validated ? ` · ✅ creator-validated (${g.validatedBy})` : ''} · ${g.askerCount} asker(s) · reach ${signalReach(g)}`);
+    lines.push(`   > "${g.quote}" — ${g.source} on [${g.postRef}]`);
+    lines.push(`   - Seen on: ${[...new Set([g.postRef, ...g.repeatPostRefs])].join(', ')}`);
+    lines.push(`   - Passes the test: ${g.whyItPasses}`);
+    lines.push(`   - Product format: ${g.productFormat}`);
   });
   lines.push('');
 
@@ -511,6 +650,7 @@ function renderMarkdown(report: AuditReport, meta: {
       lines.push(`- Promise: ${p.promise}`);
       lines.push(`- Who it's for: ${p.whoItsFor}`);
       lines.push(`- Why it fits: ${p.whyItFits}`);
+      lines.push(`- Solves goldmine signals: ${p.solvesSignals.map((n) => n + 1).join(', ') || '—'}`);
       lines.push(`- Score: ${p.score}/10 · Price band: ${p.priceBand}`);
       lines.push('');
     });
@@ -632,9 +772,10 @@ export async function auditCreator(
   const chunks: UnifiedPost[][] = [];
   for (let i = 0; i < posts.length; i += CHUNK_SIZE) chunks.push(posts.slice(i, i + CHUNK_SIZE));
 
+  const topPosts = topPerformingPosts(posts);
   log.info(`extraction pass: ${chunks.length} chunk(s) over ${posts.length} posts`);
   const extractions = await Promise.all(
-    chunks.map((chunk) => runExtraction(chunk, commentsByRef, profile.bio)),
+    chunks.map((chunk) => runExtraction(chunk, commentsByRef, profile.bio, topPosts)),
   );
   const evidence = mergeExtractions(extractions);
 
@@ -679,10 +820,29 @@ export async function auditCreator(
     platform,
     linkInBioText,
     evidence,
+    topPosts,
     sampleSize: posts.length,
   });
 
-  const report: AuditReport = { ...synthesis, visualStyle };
+  const report: AuditReport = {
+    ...synthesis,
+    top10Pains: synthesis.goldmineSignals.map(({ pain, quote, source, postRef }) => ({ pain, quote, source, postRef })),
+    lowProductFit: false,
+    visualStyle,
+  };
+
+  // --- goldmine quotes: only ones traced word for word to a post URL count ---
+  const existing = await prisma.creator.findUnique({ where: { handle } });
+  const { resolved, dropped } = resolveAuditQuotes(report.top10Pains, { posts, comments }, [
+    handle,
+    existing?.displayName ?? '',
+    profile.handle,
+    profile.displayName,
+  ]);
+  report.lowProductFit = resolved.length < GOLDMINE_MIN;
+  if (report.lowProductFit) {
+    log.warn(`@${handle} low product-fit: ${resolved.length} sourced goldmine signal(s), need ${GOLDMINE_MIN} — no outreach`);
+  }
   const fullReport = { ...report, socialLinks };
 
   // --- write artifacts ---
@@ -702,7 +862,6 @@ export async function auditCreator(
   // --- persist ---
   const recommended = report.productOpportunities.find((p) => p.recommended)!;
   // Sensitive niches: flag any product idea that crosses from a lifestyle guide into advice.
-  const existing = await prisma.creator.findUnique({ where: { handle } });
   const productFlag = isSensitiveNiche(`${report.niche} ${existing?.niche ?? ''}`)
     ? report.productOpportunities
         .map((p) => ({ p, flags: productLineFlags(`${p.title} ${p.promise}`) }))
@@ -714,6 +873,12 @@ export async function auditCreator(
   // Never overwrite an email the pipeline already found with "not found".
   const businessEmail = socialLinks.businessEmail ?? existing?.businessEmail ?? null;
   const emailSource = socialLinks.businessEmail ? 'audit (bio / link-in-bio page)' : (existing?.emailSource ?? null);
+  const fit = report.lowProductFit
+    ? {
+        status: 'DISQUALIFIED',
+        disqualifiedFor: `low product-fit: ${resolved.length} sourced goldmine signal(s), need ${GOLDMINE_MIN}`,
+      }
+    : { status: 'AUDITED' };
   const creator = await prisma.creator.upsert({
     where: { handle },
     create: {
@@ -725,7 +890,7 @@ export async function auditCreator(
       bio: profile.bio,
       followers: profile.followers,
       postCount: profile.postCount,
-      status: 'AUDITED',
+      ...fit,
       outputDir: toRelative(creatorDir(handle)),
       youtubeUrl: socialLinks.youtubeUrl,
       instagramUrl: socialLinks.instagramUrl,
@@ -743,7 +908,7 @@ export async function auditCreator(
       bio: profile.bio,
       followers: profile.followers,
       postCount: profile.postCount,
-      status: 'AUDITED',
+      ...fit,
       youtubeUrl: socialLinks.youtubeUrl,
       instagramUrl: socialLinks.instagramUrl,
       tiktokUrl: socialLinks.tiktokUrl,
@@ -765,20 +930,18 @@ export async function auditCreator(
       opportunityScore: Math.round(recommended.score * 10),
       confidence: Math.min(1, posts.length / postCount),
       sampleSize: posts.length,
-      evidence: { linkInBioUrl: linkUrl, painQuotes: evidence.painQuotes, themes: evidence.themes },
+      evidence: {
+        linkInBioUrl: linkUrl,
+        goldmineCandidates: evidence.goldmineSignals,
+        themes: evidence.themes,
+        lowProductFit: report.lowProductFit,
+      },
       raw: JSON.parse(JSON.stringify(fullReport)),
       artifactPath: toRelative(mdPath),
       model: 'multi-pass (see raw)',
     },
   });
 
-  // --- quotes: only ones traced word for word to a post URL are saved ---
-  const { resolved, dropped } = resolveAuditQuotes(report.top10Pains, { posts, comments }, [
-    creator.handle,
-    creator.displayName ?? '',
-    profile.handle,
-    profile.displayName,
-  ]);
   for (const d of dropped) log.warn(`quote not saved (${d.reason}): "${d.quote.slice(0, 80)}"`);
   for (const q of resolved) {
     await saveQuote({ ...q, creatorId: creator.id, foundAt: audit.createdAt, origin: originForPlatform(platform), auditId: audit.id });
@@ -790,6 +953,8 @@ export async function auditCreator(
     handle,
     auditId: audit.id,
     opportunityScore: audit.opportunityScore ?? 0,
+    goldmineSignals: resolved.length,
+    lowProductFit: report.lowProductFit,
     productAngles: report.productOpportunities.map((p) => ({
       title: p.title,
       promise: p.promise,
