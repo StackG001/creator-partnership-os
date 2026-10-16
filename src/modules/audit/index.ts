@@ -28,7 +28,7 @@ import {
 } from '../../lib/sources/youtube.js';
 import { createLogger } from '../../lib/logger.js';
 import { INSTAGRAM_AUDIT } from '../../lib/constants.js';
-import { originForPlatform, refreshReviewFlag, resolveAuditQuotes, saveQuote } from '../../lib/quotes.js';
+import { isCreatorName, isVerbatimIn, originForPlatform, refreshReviewFlag, resolveAuditQuotes, saveQuote } from '../../lib/quotes.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -107,6 +107,9 @@ const GOLDMINE_FILTER = [
   '5. WISH_SOMEONE_TOLD_ME — regret-based pain. They already paid the price of not knowing and will pay to shortcut it or finally fix it. Key phrases: "I wish I knew this earlier", "nobody tells you that", "I learned this the hard way", "if only I\'d found this sooner".',
   '',
   'CREATOR-VALIDATED ANGLE: If a goldmine signal directly matches the topic or title of one of the creator\'s top-performing videos (by likes or views), treat this as confirmed product demand. Boost that signal\'s priority score and flag it as creator_validated: true in the output. This is the strongest signal — the creator already proved the audience wants this content, the gap is a packaged product. Set validatedBy to the [Pn] of that top-performing post (it must be one listed under "Top-performing posts"); otherwise creator_validated: false and validatedBy: null.',
+  'Only ONE signal per audit may be creator_validated: true — the strongest match. Every other signal gets creator_validated: false and validatedBy: null, even if it also matches a top post.',
+  '',
+  'QUOTE SOURCE: every goldmine quote must be a FOLLOWER\'s comment, copied verbatim. Never quote the creator\'s own caption, post text or their own replies in the comments (marked "creator\'s own reply") — the creator asking a question or describing a problem is not evidence that the audience has it. A signal can still stand if followers express the same pain: quote one of those follower comments. If no follower comment shows it, drop the signal.',
   '',
   'THE PRODUCT OPPORTUNITY TEST — score every signal against all three; include it ONLY if it passes all three:',
   '✓ The audience has already paid money trying to solve it, or would obviously pay to solve it.',
@@ -117,8 +120,8 @@ const GOLDMINE_FILTER = [
 const GoldmineFields = {
   signalType: z.enum(GOLDMINE_SIGNAL_TYPES),
   pain: z.string().describe('one-line paraphrase of the hidden problem'),
-  quote: z.string().describe('exact comment, copied verbatim from the source text'),
-  source: z.enum(['comment', 'caption']),
+  quote: z.string().describe("exact follower comment, copied verbatim — never the creator's caption or own reply"),
+  source: z.literal('comment').describe("always 'comment' — a follower's comment, never the creator's caption or reply"),
   postRef: z.string().describe('video/post reference: the [Pn] the quote came from'),
   repeatPostRefs: z
     .array(z.string())
@@ -201,6 +204,20 @@ function signalReach(signal: { postRef: string; repeatPostRefs: string[]; askerC
   return Math.max(new Set([signal.postRef, ...signal.repeatPostRefs]).size, signal.askerCount);
 }
 
+type ValidatedSignal = { postRef: string; repeatPostRefs: string[]; askerCount: number; creator_validated: boolean };
+
+/**
+ * Only one signal per audit keeps creator_validated: the flagged one with the
+ * widest reach (posts or commenters); ties go to the earlier, i.e. stronger-ranked, one.
+ */
+export function keptValidatedIndex(signals: ValidatedSignal[]): number {
+  let best = -1;
+  signals.forEach((g, i) => {
+    if (g.creator_validated && (best < 0 || signalReach(g) > signalReach(signals[best]!))) best = i;
+  });
+  return best;
+}
+
 /** The creator's best posts by likes + 3×comments (the same weighting as bestPosts) — proof of what the audience wants. */
 function topPerformingPosts(posts: UnifiedPost[], n = 8): UnifiedPost[] {
   return [...posts]
@@ -214,7 +231,13 @@ function formatTopPosts(top: UnifiedPost[]): string {
     .join('\n');
 }
 
-const synthesisSchema = (topRefs: Set<string>) => z
+/** Source texts the synthesis quotes are checked against: follower comments vs the creator's own captions and replies. */
+interface QuoteProvenance {
+  followerTexts: string[];
+  creatorTexts: string[];
+}
+
+const synthesisSchema = (topRefs: Set<string>, provenance: QuoteProvenance) => z
   .object({
     niche: z.string().describe('one sentence'),
     audiencePersona: z.object({
@@ -248,6 +271,7 @@ const synthesisSchema = (topRefs: Set<string>) => z
     path: ['productOpportunities'],
   })
   .superRefine((v, ctx) => {
+    const kept = keptValidatedIndex(v.goldmineSignals);
     v.productOpportunities.forEach((p, i) => {
       const bad = p.solvesSignals.filter((n) => n >= v.goldmineSignals.length);
       if (bad.length) {
@@ -256,12 +280,12 @@ const synthesisSchema = (topRefs: Set<string>) => z
       }
       const solved = p.solvesSignals.map((n) => v.goldmineSignals[n]!);
       const reach = Math.max(0, ...solved.map(signalReach));
-      const cap = solved.some((g) => g.creator_validated) ? 10 : repeatScoreCap(reach);
+      const cap = p.solvesSignals.includes(kept) ? 10 : repeatScoreCap(reach);
       if (p.score > cap) {
         ctx.addIssue({
           code: 'custom',
           path: ['productOpportunities', i, 'score'],
-          message: `"${p.title}" scores ${p.score} but its best signal repeats on ${reach} post(s)/commenter(s) and none is creator-validated — max ${cap}`,
+          message: `"${p.title}" scores ${p.score} but its best signal repeats on ${reach} post(s)/commenter(s) and it doesn't solve the one creator-validated signal (index ${kept < 0 ? 'none' : kept}) — max ${cap}`,
         });
       }
     });
@@ -271,6 +295,14 @@ const synthesisSchema = (topRefs: Set<string>) => z
           code: 'custom',
           path: ['goldmineSignals', i, 'validatedBy'],
           message: `creator_validated needs validatedBy to be one of the top-performing posts (${[...topRefs].join(', ')})`,
+        });
+      }
+      const fromFollower = provenance.followerTexts.some((t) => isVerbatimIn(g.quote, t));
+      if (!fromFollower && provenance.creatorTexts.some((t) => isVerbatimIn(g.quote, t))) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['goldmineSignals', i, 'quote'],
+          message: "this quote is the creator's own caption or reply, not a follower comment — quote a follower comment showing the same pain, or drop the signal",
         });
       }
     });
@@ -414,7 +446,7 @@ function imageSpread(posts: UnifiedPost[], n: number): UnifiedPost[] {
 
 // --- pass 1: extraction ------------------------------------------------------
 
-function formatPostsBlock(posts: UnifiedPost[], commentsByRef: Map<string, UnifiedComment[]>): string {
+function formatPostsBlock(posts: UnifiedPost[], commentsByRef: Map<string, UnifiedComment[]>, creatorNames: string[]): string {
   return posts
     .map((p) => {
       const lines = [
@@ -425,7 +457,13 @@ function formatPostsBlock(posts: UnifiedPost[], commentsByRef: Map<string, Unifi
       if (comments?.length) {
         lines.push(
           `comments on ${p.ref}:`,
-          ...comments.slice(0, 20).map((c) => `  - "${c.text.trim().slice(0, 300)}"`),
+          ...comments
+            .slice(0, 20)
+            .map((c) =>
+              isCreatorName(c.author, creatorNames)
+                ? `  - (creator's own reply — not evidence) "${c.text.trim().slice(0, 300)}"`
+                : `  - @${c.author || 'follower'}: "${c.text.trim().slice(0, 300)}"`,
+            ),
         );
       }
       return lines.join('\n');
@@ -438,18 +476,19 @@ async function runExtraction(
   commentsByRef: Map<string, UnifiedComment[]>,
   niche: string,
   topPosts: UnifiedPost[],
+  creatorNames: string[],
 ): Promise<Extraction> {
   const { data } = await completeJSON({
     system: [
       "You are a research analyst preparing a creator audit for Creator Partnership OS, an internal tool that finds micro-creators and builds them a done-for-you digital product.",
-      'Extract evidence ONLY from the posts/comments given below. Never invent a quote — every "quote" must be copied verbatim from the caption or comment text provided.',
+      'Extract evidence ONLY from the posts/comments given below. Never invent a quote — every goldmine "quote" must be copied verbatim from a follower comment provided (captions and the creator\'s own replies are context, never the quote).',
       GOLDMINE_FILTER,
       'goldmineSignals: only comments that pass the filter and all three tests, each tied to the [Pn] post it came from. Zero is a valid answer — never pad with weaker comments.',
       'Top-performing posts are listed for the CREATOR-VALIDATED ANGLE check: their comments may sit in another batch, so match on topic/title.',
       'themes: recurring topics/content pillars.',
       'voiceSignals: how this creator actually writes — tone, sentence rhythm, recurring phrases, words they avoid, emoji habits, typical openers/closers.',
     ].join('\n'),
-    prompt: `Creator niche (approx): ${niche || 'unknown, infer from content'}\n\nTop-performing posts (by likes + comments, across the whole channel):\n${formatTopPosts(topPosts)}\n\nPosts:\n\n${formatPostsBlock(chunk, commentsByRef)}`,
+    prompt: `Creator niche (approx): ${niche || 'unknown, infer from content'}\n\nTop-performing posts (by likes + comments, across the whole channel):\n${formatTopPosts(topPosts)}\n\nPosts:\n\n${formatPostsBlock(chunk, commentsByRef, creatorNames)}`,
     schema: ExtractionSchema,
     schemaName: 'extract_evidence',
     tier: 'default',
@@ -512,8 +551,9 @@ async function runSynthesis(input: {
   evidence: Extraction;
   topPosts: UnifiedPost[];
   sampleSize: number;
+  provenance: QuoteProvenance;
 }): Promise<Synthesis> {
-  const { profile, platform, linkInBioText, evidence, topPosts, sampleSize } = input;
+  const { profile, platform, linkInBioText, evidence, topPosts, sampleSize, provenance } = input;
 
   const system = [
     'You are Gerald\'s research analyst at Creator Partnership OS.',
@@ -521,10 +561,10 @@ async function runSynthesis(input: {
     'This audit is the evidence pack that everything downstream is built from: the pitch to the creator, the product angle, the product itself.',
     'Ground every claim in the evidence given.',
     GOLDMINE_FILTER,
-    `goldmineSignals: re-check every candidate from the evidence against the filter and all three tests, merge near-duplicates (union their repeatPostRefs and add up askerCount — a problem that shows up across several posts or from several commenters is ONE signal with every post listed), keep creator_validated/validatedBy only where the signal really matches a top-performing post,, and keep the strongest ${GOLDMINE_MIN}-${GOLDMINE_MAX}, creator-validated signals first, then strongest. quote must be copied verbatim from the evidence (do not paraphrase into the quote field — paraphrase goes in "pain"). If fewer than ${GOLDMINE_MIN} pass, return only those that do — never pad; the creator is then flagged low product-fit and gets no outreach.`,
+    `goldmineSignals: re-check every candidate from the evidence against the filter and all three tests, merge near-duplicates (union their repeatPostRefs and add up askerCount — a problem that shows up across several posts or from several commenters is ONE signal with every post listed), keep creator_validated/validatedBy on at most ONE signal — the strongest real match to a top-performing post — and set it false/null on every other, quote only follower comments (never the creator's caption or own reply), and keep the strongest ${GOLDMINE_MIN}-${GOLDMINE_MAX}, creator-validated signals first, then strongest. quote must be copied verbatim from the evidence (do not paraphrase into the quote field — paraphrase goes in "pain"). If fewer than ${GOLDMINE_MIN} pass, return only those that do — never pad; the creator is then flagged low product-fit and gets no outreach.`,
     'hookLines must sound like this specific creator wrote them — use their real phrases, sentence rhythm and emoji habits from voiceGuide, not generic marketing copy.',
     'productOpportunities: exactly 5 candidate digital products this creator could sell to this audience, each listing the goldmineSignals (by index) it solves in solvesSignals. Exactly one must have recommended: true — the one with the best score.',
-    'Scoring weights heavily toward REPEAT OCCURRENCE: a problem that appears once is interesting, a problem that appears across 5+ posts/videos is a product. Reach = the larger of the number of distinct posts (postRef + repeatPostRefs) and askerCount, for the widest-reaching signal a product solves. Hard ceilings: reach 0 → 3, 1 → 5, 2 → 6.5, 3-4 → 8, 5+ → 10. A product solving a creator_validated signal has no ceiling below 10 and should be the recommended one unless another product clearly beats it. Within the ceiling, score higher for multiple signals solved and for TRIED_EVERYTHING / SHAME_OR_EMBARRASSMENT signals (proven willingness to pay).',
+    'Scoring weights heavily toward REPEAT OCCURRENCE: a problem that appears once is interesting, a problem that appears across 5+ posts/videos is a product. Reach = the larger of the number of distinct posts (postRef + repeatPostRefs) and askerCount, for the widest-reaching signal a product solves. Hard ceilings: reach 0 → 3, 1 → 5, 2 → 6.5, 3-4 → 8, 5+ → 10. A product solving THE creator_validated signal has no ceiling below 10 and should be the recommended one unless another product clearly beats it. Within the ceiling, score higher for multiple signals solved and for TRIED_EVERYTHING / SHAME_OR_EMBARRASSMENT signals (proven willingness to pay).',
     `If the niche touches health, medical conditions, mental health or money: ${SENSITIVE_PRODUCT_RULE}`,
     'partnershipPitchAngle: the single sharpest insight to open outreach with — something that proves you actually looked at their content, not a template line.',
   ].join('\n');
@@ -555,7 +595,7 @@ async function runSynthesis(input: {
   const { data } = await completeJSON({
     system,
     prompt,
-    schema: synthesisSchema(new Set(topPosts.map((p) => p.ref))),
+    schema: synthesisSchema(new Set(topPosts.map((p) => p.ref)), provenance),
     schemaName: 'audit_report',
     tier: 'heavy',
     label: 'audit:synthesis',
@@ -773,9 +813,11 @@ export async function auditCreator(
   for (let i = 0; i < posts.length; i += CHUNK_SIZE) chunks.push(posts.slice(i, i + CHUNK_SIZE));
 
   const topPosts = topPerformingPosts(posts);
+  const existing = await prisma.creator.findUnique({ where: { handle } });
+  const creatorNames = [handle, existing?.displayName ?? '', profile.handle, profile.displayName];
   log.info(`extraction pass: ${chunks.length} chunk(s) over ${posts.length} posts`);
   const extractions = await Promise.all(
-    chunks.map((chunk) => runExtraction(chunk, commentsByRef, profile.bio, topPosts)),
+    chunks.map((chunk) => runExtraction(chunk, commentsByRef, profile.bio, topPosts, creatorNames)),
   );
   const evidence = mergeExtractions(extractions);
 
@@ -822,6 +864,19 @@ export async function auditCreator(
     evidence,
     topPosts,
     sampleSize: posts.length,
+    provenance: {
+      followerTexts: comments.filter((c) => !isCreatorName(c.author, creatorNames)).map((c) => c.text),
+      creatorTexts: [
+        ...posts.map((p) => p.caption),
+        ...comments.filter((c) => isCreatorName(c.author, creatorNames)).map((c) => c.text),
+      ],
+    },
+  });
+
+  // Only the single strongest creator-validated signal keeps the flag.
+  const kept = keptValidatedIndex(synthesis.goldmineSignals);
+  synthesis.goldmineSignals.forEach((g, i) => {
+    if (i !== kept && g.creator_validated) Object.assign(g, { creator_validated: false, validatedBy: null });
   });
 
   const report: AuditReport = {
@@ -831,14 +886,15 @@ export async function auditCreator(
     visualStyle,
   };
 
-  // --- goldmine quotes: only ones traced word for word to a post URL count ---
-  const existing = await prisma.creator.findUnique({ where: { handle } });
-  const { resolved, dropped } = resolveAuditQuotes(report.top10Pains, { posts, comments }, [
-    handle,
-    existing?.displayName ?? '',
-    profile.handle,
-    profile.displayName,
-  ]);
+  // --- goldmine quotes: only follower comments traced word for word to a post URL count ---
+  const traced = resolveAuditQuotes(report.top10Pains, { posts, comments }, creatorNames);
+  const resolved = traced.resolved.filter((q) => q.authorType === 'FOLLOWER_COMMENT');
+  const dropped = [
+    ...traced.dropped,
+    ...traced.resolved
+      .filter((q) => q.authorType !== 'FOLLOWER_COMMENT')
+      .map((q) => ({ quote: q.text, reason: "the creator's own caption or reply, not a follower comment" })),
+  ];
   report.lowProductFit = resolved.length < GOLDMINE_MIN;
   if (report.lowProductFit) {
     log.warn(`@${handle} low product-fit: ${resolved.length} sourced goldmine signal(s), need ${GOLDMINE_MIN} — no outreach`);
