@@ -713,6 +713,17 @@ function renderMarkdown(report: AuditReport, meta: {
 export interface AuditOptions {
   postCount?: number;
   refresh?: boolean;
+  /**
+   * Real comments seen by hand that the fetch missed (e.g. on a post newer than
+   * the cache), added to the source data. postRef must be a fetched post, so
+   * every quote still traces to its post URL.
+   */
+  extraComments?: Array<{ postRef: string; author: string; text: string; likeCount: number }>;
+  /**
+   * Test run: the full audit, but nothing is written to the database (no status
+   * change, no Audit row, no quotes) and the report goes to audit/test-audit.{md,json}.
+   */
+  test?: boolean;
 }
 
 /**
@@ -798,6 +809,13 @@ export async function auditCreator(
       JSON.stringify({ platform, profile, posts, top, comments }, null, 2),
       'utf8',
     );
+  }
+
+  if (options.extraComments?.length) {
+    const unknown = options.extraComments.filter((c) => !posts.some((p) => p.ref === c.postRef));
+    if (unknown.length) throw new Error(`extra comment(s) on unknown post ref(s): ${unknown.map((c) => c.postRef).join(', ')}`);
+    comments = [...comments, ...options.extraComments];
+    log.info(`added ${options.extraComments.length} extra comment(s) by hand`);
   }
 
   const commentsByRef = new Map<string, UnifiedComment[]>();
@@ -911,6 +929,22 @@ export async function auditCreator(
     profileUrl: canonicalUrl,
     socialLinks,
   });
+
+  if (options.test) {
+    const testMd = await writeArtifact(handle, 'audit', 'test-audit.md', markdown);
+    await writeJsonArtifact(handle, 'audit', 'test-audit.json', { ...fullReport, quoteCheck: { saved: resolved, dropped } });
+    log.info(`test audit — nothing written to the database; ${resolved.length} quote(s) would be saved, ${dropped.length} dropped`);
+    return {
+      handle,
+      auditId: 'test',
+      opportunityScore: Math.round(report.productOpportunities.find((p) => p.recommended)!.score * 10),
+      goldmineSignals: resolved.length,
+      lowProductFit: report.lowProductFit,
+      productAngles: report.productOpportunities.map((p) => ({ title: p.title, promise: p.promise, confidence: p.score / 10 })),
+      artifactPath: toRelative(testMd),
+      socialLinks,
+    };
+  }
 
   const mdPath = await writeArtifact(handle, 'audit', 'audit.md', markdown);
   await writeJsonArtifact(handle, 'audit', 'audit.json', fullReport);

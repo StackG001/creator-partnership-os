@@ -114,6 +114,7 @@ npm run scorer -- --all --rescore
 # 3. audit the audience: pillars, pains, monetisation gaps, product angles
 npm run audit -- --handle jamesclearcoffee
 npm run audit -- --handle jamesclearcoffee --posts 40 --refresh
+npm run audit -- --handle woomaamee --test --extra-comments extra.json   # full audit, nothing saved to the database
 
 # 4. capture the creator's voice, palette and typography
 npm run brand -- --handle jamesclearcoffee
