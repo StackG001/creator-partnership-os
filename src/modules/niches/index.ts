@@ -164,16 +164,17 @@ export async function generateNiches(count: number = NICHE_LIBRARY.newNichesPerW
       `Existing niches (do not repeat): ${existing.map((n) => n.name).join('; ') || 'none'}`,
       `Retired niches (dead — avoid): ${retired.join('; ') || 'none'}`,
     ].join('\n'),
-    schema: GeneratedSchema.refine((v) => v.niches.length === count, { message: `exactly ${count} niches` }),
+    // At least `count`, extras trimmed below: an exact-count check failed all 3 attempts on 2026-10-23.
+    schema: GeneratedSchema.refine((v) => v.niches.length >= count, { message: `at least ${count} niches` }),
     schemaName: 'niche_library',
     tier: 'default',
     label: 'niches:generate',
-    maxTokens: 8000,
+    maxTokens: 16000,
   });
 
   const created: GenerateResult['created'] = [];
   const known = new Set(existing.map((n) => n.name.toLowerCase()));
-  for (const g of data.niches) {
+  for (const g of data.niches.slice(0, count)) {
     if (known.has(g.name.toLowerCase())) continue;
     // Hard filter: entertainment/lifestyle audiences don't buy a fix — they aren't stuck.
     const rejected = g.passesSkillTest
