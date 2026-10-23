@@ -550,6 +550,55 @@ async function writeState(state: PipelineState): Promise<void> {
   await fs.writeFile(statePath(), JSON.stringify(state, null, 2), 'utf8');
 }
 
+// One daily part at a time, across both parts: each one drafts follow-ups and auto-sends, so two
+// running together both pass sendChecks before either has sent (2026-10-22: the @reboot catch-up
+// and a manual run each sent @dailykoreanwithjaerim seq 2). A lock left by a dead process is taken over.
+
+function lockPath(): string {
+  return path.join(outputsRoot(), '_pipeline', 'pipeline.lock');
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Takes the pipeline lock; returns a release function, or the holder's description when it is taken. */
+async function acquireLock(part: DailyPart): Promise<{ release: () => Promise<void> } | { heldBy: string }> {
+  await fs.mkdir(path.dirname(lockPath()), { recursive: true });
+  const mine = JSON.stringify({ pid: process.pid, part, startedAt: new Date().toISOString() });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await fs.writeFile(lockPath(), mine, { encoding: 'utf8', flag: 'wx' });
+      return {
+        release: async () => {
+          const current = await fs.readFile(lockPath(), 'utf8').catch(() => null);
+          if (current === mine) await fs.rm(lockPath(), { force: true });
+        },
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const held = await fs.readFile(lockPath(), 'utf8').catch(() => '');
+      let holder: { pid?: number; part?: string; startedAt?: string } = {};
+      try {
+        holder = JSON.parse(held);
+      } catch {
+        // unreadable lock: treat as stale
+      }
+      if (holder.pid && processAlive(holder.pid)) {
+        return { heldBy: `${holder.part ?? '?'} part (pid ${holder.pid}, started ${holder.startedAt ?? '?'})` };
+      }
+      log.warn(`taking over a stale pipeline lock from pid ${holder.pid ?? '?'}`);
+      await fs.rm(lockPath(), { force: true });
+    }
+  }
+  return { heldBy: 'another run (lock could not be taken)' };
+}
+
 export interface DailyPartResult {
   part: DailyPart;
   runId: string;
@@ -559,6 +608,19 @@ export interface DailyPartResult {
 export async function runDailyPart(
   part: DailyPart,
   options: { force?: boolean; noSend?: boolean } = {},
+): Promise<DailyPartResult | { skipped: string }> {
+  const lock = await acquireLock(part);
+  if ('heldBy' in lock) return { skipped: `another pipeline run is in progress — ${lock.heldBy}; not starting ${part}` };
+  try {
+    return await runDailyPartLocked(part, options);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function runDailyPartLocked(
+  part: DailyPart,
+  options: { force?: boolean; noSend?: boolean },
 ): Promise<DailyPartResult | { skipped: string }> {
   const state = await readState();
   const day = today();

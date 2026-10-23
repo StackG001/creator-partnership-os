@@ -288,6 +288,12 @@ been found); then — only while `AUTO_SEND.enabled` — send EMAIL drafts that
 pass every `sendChecks` check, max 15/day, Resend ids on the message and in
 `outputs/_pipeline/sends.jsonl`. Anything failing is held (`heldFor`) with the reason.
 
+**One part at a time.** `runDailyPart` takes `outputs/_pipeline/pipeline.lock`
+(shared by both parts); a second run while it is held — the `@reboot`
+catch-up overlapping a manual run, say — skips instead of starting. A lock
+whose process is dead is taken over. Added 2026-10-22 after two overlapping
+runs each sent @dailykoreanwithjaerim seq 2.
+
 **DMs are never sent automatically.** `npm run dm-queue` serves the DM queue
 page (phone + laptop, token in the URL): approved unsent DMs oldest first,
 "Copy & open" (Instagram `https://ig.me/m/<handle>`, YouTube About page, X
