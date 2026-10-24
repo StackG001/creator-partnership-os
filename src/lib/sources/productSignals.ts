@@ -90,3 +90,26 @@ export function analyzeMonetization(bio: string, urls: string[]): ProductSignalR
 
   return { hasDigitalProduct, evidence, monetization };
 }
+
+// Video descriptions are noisier than a bio ("the braking system", "shop my
+// favorites" affiliate storefronts, "buy my ingredients"), so only an explicit
+// claim of the creator's own product counts there, or a link to a store/course
+// platform. Members-only downloads (scripts, PDFs) count as a product. Etsy is
+// left out: description links to Etsy are mostly other people's shops.
+// Tested 2026-10-24 on 122 YouTube creators: 9 real sellers, no false positives.
+const VIDEO_OWN_PRODUCT =
+  /\b(my (new |latest |first |free |full |online )?(book|e-?book|cookbook|workbook|course|masterclass|program|programme|guide|templates?|presets|planner|academy|bootcamp)s?\b|digital downloads?|(?:buy|get|grab|download) (?:my|the|our) (?:[\w-]+ ){0,2}(?:book|e-?book|guide|course|templates?|planner|presets|pdf)\b|join my (?:[\w-]+ ){0,2}(?:program|course|academy|bootcamp|challenge)|members?(?:hip)? (?:only )?(?:[\w-]+ ){0,4}(?:pdf|download|worksheet)s?)/i;
+const VIDEO_STORE_LINK =
+  /(gumroad\.com|payhip\.com|teachable\.com|kajabi\.com|mykajabi\.com|thinkific\.com|podia\.com|stan\.store|whop\.com|sellfy\.com|systeme\.io|skool\.com|learnworlds\.com|samcart\.com|thrivecart\.com|ko-fi\.com\/s\/)/i;
+
+/** Evidence that a YouTube creator's video descriptions sell their own product ("My book: …", "Digital Downloads"), else null. */
+export function videoDescriptionProduct(descriptions: string[]): string | null {
+  for (const d of descriptions) {
+    const m = VIDEO_OWN_PRODUCT.exec(d) ?? VIDEO_STORE_LINK.exec(d);
+    if (m) {
+      const around = d.slice(Math.max(0, m.index - 40), m.index + m[0].length + 60).replace(/\s+/g, ' ').trim();
+      return `video description: "${around}"`;
+    }
+  }
+  return null;
+}

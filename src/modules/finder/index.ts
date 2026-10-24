@@ -5,7 +5,7 @@ import { IG_BRAND_CATEGORIES, QUALIFICATION } from '../../lib/constants.js';
 import type { Platform, SourceKind } from '../../lib/constants.js';
 import { ensureCreatorDir, normalizeHandle, toRelative } from '../../lib/paths.js';
 import { extractUrls, fetchPage, pickLinkInBioUrl } from '../../lib/sources/linkInBio.js';
-import { analyzeMonetization, type ProductSignalResult } from '../../lib/sources/productSignals.js';
+import { analyzeMonetization, videoDescriptionProduct, type ProductSignalResult } from '../../lib/sources/productSignals.js';
 import {
   fetchInstagramProfiles,
   fetchInstagramRelatedProfiles,
@@ -585,6 +585,12 @@ export async function findCreators(options: FinderOptions): Promise<FinderResult
   const evaluated = [];
   for (const candidate of candidates) {
     let signals = analyzeMonetization(candidate.bio, candidate.externalUrls);
+    // YouTube creators often plug their product under every video, not in the bio.
+    if (candidate.platform === 'YOUTUBE') {
+      const videos = (candidate.raw as { videos?: Array<{ description?: string }> }).videos ?? [];
+      const inVideos = videoDescriptionProduct(videos.map((v) => v.description ?? ''));
+      if (inVideos) signals = { ...signals, hasDigitalProduct: true, evidence: [...signals.evidence, inVideos] };
+    }
     let verdict = evaluateQualification(candidate, options, signals);
     // Stage 1, last check (free — a plain page fetch): open their link-in-bio
     // and drop anyone already selling a course, ebook, guide or paid product.

@@ -114,6 +114,12 @@ in code before anything can send (`sendChecks`, `npm run outreach -- --check <id
   sending and marking a DM sent are all refused without it.
 - **Disqualified creators** (e.g. already sell a course/training) stay in the
   database so the finder never re-adds them, and drafting to them is refused.
+- **YouTube video descriptions are checked for an existing product too**
+  (`videoDescriptionProduct` in `src/lib/sources/productSignals.ts`) — in the
+  finder and again before seq 1 is drafted. Only explicit own-product claims
+  count ("My book: …", "my course", "Digital Downloads", store links);
+  **members-only PDFs/downloads count as a product** (Gerald, 2026-10-24).
+  Etsy links don't count (mostly other people's shops).
 - A comment the creator wrote themself (their own reply) is their words, not
   the audience's — stored as `CREATOR_CAPTION`, never as a follower comment.
 

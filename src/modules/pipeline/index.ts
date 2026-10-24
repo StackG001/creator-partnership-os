@@ -23,7 +23,7 @@ import {
 } from '../../lib/sources/apify.js';
 import { INSTAGRAM_ACTOR } from '../../lib/sources/instagram.js';
 import { findBusinessEmail } from '../../lib/sources/emailFinder.js';
-import { analyzeMonetization } from '../../lib/sources/productSignals.js';
+import { analyzeMonetization, videoDescriptionProduct } from '../../lib/sources/productSignals.js';
 import { fetchPage } from '../../lib/sources/linkInBio.js';
 import { instagramDmHandle } from '../../lib/sources/instagramGoogle.js';
 import { QuoteSourceError } from '../../lib/quotes.js';
@@ -450,6 +450,17 @@ async function runPlatform(platform: PipelinePlatform): Promise<RunDetails & { a
         data: { status: 'DISQUALIFIED', disqualifiedFor: 'already sells a course/program (website)', hasDigitalProduct: true, productEvidence: [sells] },
       });
       l.disqualifiedFor = `already sells a course/program — ${sells}`;
+      continue;
+    }
+    // Same for a product plugged under their videos (creators found before the finder checked them).
+    const videos = ((creator.raw ?? {}) as { videos?: Array<{ description?: string }> }).videos ?? [];
+    const inVideos = creator.platform === 'YOUTUBE' ? videoDescriptionProduct(videos.map((v) => v.description ?? '')) : null;
+    if (inVideos) {
+      await prisma.creator.update({
+        where: { id: creator.id },
+        data: { status: 'DISQUALIFIED', disqualifiedFor: 'already sells a product (video descriptions)', hasDigitalProduct: true, productEvidence: [inVideos] },
+      });
+      l.disqualifiedFor = `already sells a product — ${inVideos}`;
       continue;
     }
     if (!creator.businessEmail && !creator.contactEmail) await tryFindEmail(creator).catch(() => null);
