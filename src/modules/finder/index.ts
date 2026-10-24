@@ -640,8 +640,17 @@ export async function findCreators(options: FinderOptions): Promise<FinderResult
     );
   }
 
+  // A do-not-contact creator turning up in a search is skipped, not fatal —
+  // one of them used to abort the whole search (sourdough discard, 2026-10-24).
+  const blocked = new Set(
+    (await prisma.creator.findMany({ where: { handle: { in: toPersist.map((t) => t.candidate.handle) }, doNotContact: true }, select: { handle: true } })).map((c) => c.handle),
+  );
   const created: Creator[] = [];
   for (const { candidate, signals } of toPersist) {
+    if (blocked.has(candidate.handle)) {
+      log.info(`@${candidate.handle} is do-not-contact — skipped, never re-added`);
+      continue;
+    }
     created.push(await upsertCreator(candidate, signals, source));
   }
 
