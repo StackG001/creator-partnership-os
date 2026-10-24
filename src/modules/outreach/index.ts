@@ -543,6 +543,8 @@ export interface DraftOptions {
   preview?: boolean;
   /** Bodies to treat as already sent (preview of seq 2 before seq 1 has gone out). */
   earlier?: string[];
+  /** Quote id the draft must hook on: it becomes the only quote the draft may use. */
+  quoteId?: string;
 }
 
 export async function draftOutreach(
@@ -596,7 +598,13 @@ export async function draftOutreach(
     : [];
   const earlier = options.earlier ?? sent.map((m) => m.body);
   const unused = usable.filter((q) => !earlier.some((b) => quotedSpansIn(b).some((span) => isVerbatimIn(span, q.text))));
-  const quotesForDraft = isClosing ? [] : sequence === 2 && unused.length ? unused : usable;
+  let quotesForDraft = isClosing ? [] : sequence === 2 && unused.length ? unused : usable;
+  if (options.quoteId) {
+    if (isClosing) throw new Error(`--quote: sequence ${sequence} is the closing note, which quotes no one.`);
+    const pinned = usable.find((q) => q.id === options.quoteId);
+    if (!pinned) throw new Error(`--quote ${options.quoteId} is not one of @${handle}'s usable (fully sourced) quotes.`);
+    quotesForDraft = [pinned];
+  }
 
   log.info(`drafting ${variants} ${channel.toLowerCase()} variant(s), sequence ${sequence}`);
   const drafted = await draftVariants(

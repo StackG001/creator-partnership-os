@@ -33,6 +33,7 @@ export const spec: CliSpec = {
     channel: { type: 'string', description: 'email | ig_dm | yt_about | x_dm | manual.', default: 'email' },
     sequence: { type: 'string', description: '1 = first touch, 2+ = follow-up.', default: '1' },
     variants: { type: 'string', description: 'How many variants to draft.', default: '2' },
+    quote: { type: 'string', description: 'With --handle: Quote id the draft must hook on (the only quote it may use).' },
     approve: { type: 'string', description: 'Mark a DRAFT OutreachMessage id as APPROVED.' },
     send: { type: 'string', description: 'Send an APPROVED OutreachMessage id via Resend (EMAIL only).' },
     'test-to': {
@@ -203,6 +204,7 @@ await runCli(spec, async (ctx) => {
     channel,
     Number(ctx.flags.sequence ?? 1),
     Number(ctx.flags.variants ?? 2),
+    { quoteId: ctx.flags.quote ? String(ctx.flags.quote) : undefined },
   );
 
   if (ctx.json) {
