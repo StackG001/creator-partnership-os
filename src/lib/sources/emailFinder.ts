@@ -18,7 +18,7 @@ const JUNK = /\.(png|jpe?g|gif|webp|svg)$|@(example|sentry|wixpress|domain)\.|^(
  * Addresses that belong to a platform, not the creator — link hubs, social
  * networks, app stores, site builders. Never a creator's business email.
  */
-const PLATFORM_EMAIL_DOMAINS = /@(?:[\w-]+\.)*(linktr\.ee|linktree\.com|beacons\.ai|stan\.store|linkin\.bio|lnk\.bio|bio\.link|tap\.bio|campsite\.bio|hoo\.be|koji\.to|withkoji\.com|carrd\.co|solo\.to|snipfeed\.co|instagram\.com|facebook\.com|meta\.com|fb\.com|tiktok\.com|youtube\.com|google\.com|apple\.com|amazon\.com|shopify\.com|squarespace\.com|wix\.com|wordpress\.com|godaddy\.com|mailchimp\.com|kit\.com|convertkit\.com|patreon\.com|gumroad\.com|teachable\.com|kajabi\.com|etsy\.com|substack\.com|bitly\.com|bit\.ly|tinyurl\.com|rebrandly\.com|cutt\.ly|lnkd\.in)$/i;
+const PLATFORM_EMAIL_DOMAINS = /@(?:[\w-]+\.)*(linktr\.ee|linktree\.com|beacons\.ai|stan\.store|linkin\.bio|lnk\.bio|bio\.link|tap\.bio|campsite\.bio|hoo\.be|koji\.to|withkoji\.com|carrd\.co|solo\.to|snipfeed\.co|instagram\.com|facebook\.com|meta\.com|fb\.com|tiktok\.com|youtube\.com|google\.com|apple\.com|amazon\.com|shopify\.com|squarespace\.com|wix\.com|wordpress\.com|godaddy\.com|mailchimp\.com|kit\.com|convertkit\.com|patreon\.com|gumroad\.com|teachable\.com|kajabi\.com|etsy\.com|substack\.com|bitly\.com|bit\.ly|tinyurl\.com|rebrandly\.com|cutt\.ly|lnkd\.in|creativecommons\.org)$/i;
 
 /** Whether the address's domain can receive mail at all (has MX records). Unknown DNS errors count as "can". */
 export async function domainAcceptsMail(email: string): Promise<boolean> {
@@ -39,6 +39,10 @@ export function isPlatformEmail(email: string): boolean {
 const HUBS = ['linktr.ee', 'beacons.ai', 'stan.store', 'linkin.bio', 'lnk.bio', 'bio.link', 'tap.bio', 'campsite.bio', 'hoo.be', 'koji.to', 'msha.ke', 'withkoji.com', 'carrd.co', 'solo.to', 'snipfeed.co'];
 // Outbound links that are never the creator's own site: socials, stores, app stores, the hub itself.
 const SOCIAL = /(instagram|tiktok|youtube|youtu\.be|facebook|twitter|x\.com|pinterest|threads|spotify|apple\.com|amazon|amzn|play\.google|google\.com|linktr|linktree|onelink|app\.link|bit\.ly|bitly\.com|tinyurl\.com|rebrandly)/i;
+// Third-party sites video descriptions link to — licence credits, music libraries, memberships,
+// tools, references. Their contact addresses are the site's, not the creator's
+// (info@creativecommons.org from a "CC BY 3.0" music credit, 2026-10-23).
+const NOT_OWN = /(creativecommons\.org|incompetech|bensound|epidemicsound|artlist\.io|soundcloud|bandcamp|patreon|ko-fi|buymeacoffee|paypal|gumroad|discord|reddit|twitch|wikipedia|github|ankisrs|ankiweb|canva\.com|notion\.so|skillshare|udemy|audible)/i;
 
 function pick(text: string): string | null {
   const all = [...new Set((text.match(EMAIL_RE) ?? []).map((e) => e.replace(/[.,;:]+$/, '')))].filter((e) => !JUNK.test(e) && !isPlatformEmail(e));
@@ -89,7 +93,7 @@ async function ownSites(urls: string[]): Promise<string[]> {
     if (SHORTENERS.test(host(raw)) && new URL(raw).pathname.replace(/\/+$/, '') === '') continue;
     const u = await resolveShort(raw);
     const h = host(u);
-    if (!h || SOCIAL.test(u) || SHORTENERS.test(h) || HUBS.some((x) => h === x || h.endsWith(`.${x}`))) continue;
+    if (!h || SOCIAL.test(u) || NOT_OWN.test(h) || SHORTENERS.test(h) || HUBS.some((x) => h === x || h.endsWith(`.${x}`))) continue;
     const root = rootDomain(h);
     if (!out.has(root)) out.set(root, `https://${h}`);
     if (out.size >= 3) break;
@@ -130,16 +134,40 @@ async function emailFromOwnSite(site: string): Promise<{ sameDomain: FoundEmail 
   return { sameDomain: null, other };
 }
 
+/** Letters and digits only, lowercased: "Rooftop-Astro" → "rooftopastro". */
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * Whether a site's domain is plausibly the creator's own, judged from their
+ * handle and display name: predatoryplants.com for @predatoryplants. Video
+ * descriptions link to sponsors and gear (rocketmoney.com, qhyccd.com) far more
+ * often than to the creator's own site, so links found there must pass this.
+ */
+export function domainMatchesNames(url: string, names: string[]): boolean {
+  const label = squash(rootDomain(host(url)).split('.')[0] ?? '');
+  if (label.length < 4) return false;
+  return names.some((n) => {
+    const whole = squash(n);
+    if (whole.length >= 4 && (whole.includes(label) || label.includes(whole))) return true;
+    return n.split(/[\s|·•\-_.]+/).some((w) => squash(w).length >= 5 && label.includes(squash(w)));
+  });
+}
+
 export async function findBusinessEmail(input: {
   bio: string | null;
   externalUrls: string[];
+  /** Channel/video descriptions. Links in them only count as the creator's site when they match `names`. */
   youtubeTexts?: string[];
+  /** Handle and display name, for `domainMatchesNames`. Without them, description links are never treated as the creator's site. */
+  names?: string[];
 }): Promise<FoundEmail | null> {
   const fromBio = pick(input.bio ?? '');
   if (fromBio) return { email: fromBio, source: 'bio' };
 
   const youtubeUrls = (input.youtubeTexts ?? []).flatMap((t) => extractUrls(t));
-  const allUrls = [...input.externalUrls, ...extractUrls(input.bio ?? ''), ...youtubeUrls];
+  const ownYoutubeUrls: string[] = [];
+  for (const u of youtubeUrls) if (domainMatchesNames(await resolveShort(u), input.names ?? [])) ownYoutubeUrls.push(u);
+  const allUrls = [...input.externalUrls, ...extractUrls(input.bio ?? ''), ...ownYoutubeUrls];
   let fallback: FoundEmail | null = null;
 
   // 1. The link-in-bio page itself, and — for a link hub — the sites it links out to.

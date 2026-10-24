@@ -245,18 +245,33 @@ export async function websiteSellsProduct(url: string | null): Promise<string | 
   return signals.hasDigitalProduct ? `website ${host}: ${signals.evidence[0] ?? 'product found'}` : null;
 }
 
-async function tryFindEmail(creator: Creator): Promise<string | null> {
-  if (creator.businessEmail || creator.contactEmail) return null;
+/**
+ * Email-finder input for a creator. A YouTube creator's websiteUrl was picked
+ * out of their descriptions (eso.org from a photo credit, say), so it goes in
+ * with the description text and has to match their name like any other link there.
+ */
+function emailFinderInput(creator: Creator): Parameters<typeof findBusinessEmail>[0] {
   const raw = (creator.raw ?? {}) as {
     profile?: { externalUrls?: string[] };
     channel?: { description?: string };
     videos?: Array<{ description?: string }>;
   };
-  const found = await findBusinessEmail({
+  const fromProfile = creator.platform !== 'YOUTUBE';
+  return {
     bio: creator.bio,
-    externalUrls: [...(raw.profile?.externalUrls ?? []), ...(creator.websiteUrl ? [creator.websiteUrl] : [])],
-    youtubeTexts: [raw.channel?.description ?? '', ...(raw.videos ?? []).map((v) => v.description ?? '')],
-  });
+    externalUrls: [...(raw.profile?.externalUrls ?? []), ...(fromProfile && creator.websiteUrl ? [creator.websiteUrl] : [])],
+    youtubeTexts: [
+      ...(!fromProfile && creator.websiteUrl ? [creator.websiteUrl] : []),
+      raw.channel?.description ?? '',
+      ...(raw.videos ?? []).map((v) => v.description ?? ''),
+    ],
+    names: [creator.handle, creator.displayName ?? ''].filter(Boolean),
+  };
+}
+
+async function tryFindEmail(creator: Creator): Promise<string | null> {
+  if (creator.businessEmail || creator.contactEmail) return null;
+  const found = await findBusinessEmail(emailFinderInput(creator));
   if (!found) return null;
   await prisma.creator.update({ where: { id: creator.id }, data: { businessEmail: found.email, emailSource: found.source } });
   log.info(`@${creator.handle}: business email found in ${found.source}`);
@@ -1008,12 +1023,7 @@ export async function dryRunDaily(): Promise<string> {
   });
   let found = 0;
   for (const c of dmOnly) {
-    const raw = (c.raw ?? {}) as { profile?: { externalUrls?: string[] }; channel?: { description?: string }; videos?: Array<{ description?: string }> };
-    const f = await findBusinessEmail({
-      bio: c.bio,
-      externalUrls: [...(raw.profile?.externalUrls ?? []), ...(c.websiteUrl ? [c.websiteUrl] : [])],
-      youtubeTexts: [raw.channel?.description ?? '', ...(raw.videos ?? []).map((v) => v.description ?? '')],
-    }).catch(() => null);
+    const f = await findBusinessEmail(emailFinderInput(c)).catch(() => null);
     if (f) {
       found++;
       out.push(`- @${c.handle}: **${f.email}** (found in ${f.source})`);
