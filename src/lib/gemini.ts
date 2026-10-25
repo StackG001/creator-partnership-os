@@ -143,7 +143,7 @@ async function streamOnce(model: string, body: unknown): Promise<StreamChunk[]> 
 
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => '');
-    throw new GeminiError(`Gemini ${model}: ${response.status} ${text.slice(0, 500)}`, response.status);
+    throw new GeminiError(`Gemini ${model}: ${response.status} ${text.slice(0, 2000)}`, response.status);
   }
 
   const chunks: StreamChunk[] = [];
@@ -169,17 +169,30 @@ async function streamOnce(model: string, body: unknown): Promise<StreamChunk[]> 
   return chunks;
 }
 
-/** Network-level retries for 429/5xx, like the Anthropic SDK's maxRetries. */
+/** Google's own "retry in Ns" hint on a 429 (RetryInfo.retryDelay), in ms. */
+function retryDelayMs(error: unknown): number | undefined {
+  const match = /"retryDelay":\s*"(\d+(?:\.\d+)?)s"/.exec(String(error));
+  return match ? Math.ceil(Number(match[1]) * 1000) : undefined;
+}
+
+/**
+ * Network-level retries for 429/5xx, like the Anthropic SDK's maxRetries.
+ * Gemini's 503 "high demand" spikes and per-minute 429s last tens of seconds,
+ * so back off 2s → 32s (~1 minute in all), or as long as a 429 asks. A 429
+ * asking for more than a minute is a daily quota (free tier: 20 requests per
+ * model per day) — retrying can't help, so it fails straight away.
+ */
 async function stream(model: string, body: unknown): Promise<StreamChunk[]> {
-  const attempts = 4;
+  const attempts = 6;
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await streamOnce(model, body);
     } catch (error) {
       const status = error instanceof GeminiError ? error.status : 0;
       const retryable = status === 0 || status === 429 || status >= 500;
-      if (!retryable || attempt >= attempts) throw error;
-      const wait = 1000 * 2 ** (attempt - 1);
+      const hinted = retryDelayMs(error);
+      if (!retryable || attempt >= attempts || (hinted ?? 0) > 60_000) throw error;
+      const wait = hinted ?? 2000 * 2 ** (attempt - 1);
       log.warn(`${model}: ${String(error)} — retry ${attempt}/${attempts - 1} in ${wait}ms`);
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
