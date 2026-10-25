@@ -169,7 +169,13 @@ qualified).
 - Next.js, TypeScript, App Router.
 - SQLite via Prisma for now. Everything is written so the move to Supabase
   (Postgres) is a datasource change, not a rewrite.
-- Anthropic API for **all** LLM work — no other model provider.
+- Anthropic API for all LLM work. **One exception (Gerald, 2026-10-25):**
+  Gemini is the fallback when Anthropic is unavailable — no credits, key
+  rejected, rate-limited after retries, down — and only if `GEMINI_API_KEY` is
+  set. It lives inside `send()` in `src/lib/llm.ts` (adapter:
+  `src/lib/gemini.ts`), so callers never choose a provider. Billing/auth
+  errors switch the rest of the run to Gemini; transient ones fall back per
+  call. `LlmResult.model` records which model actually ran. No other provider.
 - Playwright for HTML→PDF.
 - All secrets come from `.env`; `.env.example` documents every one of them.
 

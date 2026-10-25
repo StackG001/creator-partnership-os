@@ -52,6 +52,11 @@ export const KEY_HELP: Record<string, { label: string; where: string; required: 
     where: 'resend.com/api-keys',
     required: false,
   },
+  GEMINI_API_KEY: {
+    label: 'Gemini API key (fallback when Anthropic is unavailable)',
+    where: 'aistudio.google.com/apikey',
+    required: false,
+  },
 };
 
 /** Show enough to tell two keys apart, never the key. */

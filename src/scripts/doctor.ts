@@ -126,6 +126,7 @@ const OPTIONAL_UNLOCKS: Record<(typeof OPTIONAL_ENV_KEYS)[number], string> = {
   WHOP_API_KEY: 'publisher: creating products and checkout links',
   WHOP_COMPANY_ID: 'publisher: which Whop company to publish under',
   RESEND_API_KEY: 'outreach: sending APPROVED emails (drafting works without it)',
+  GEMINI_API_KEY: 'llm: fallback provider when Anthropic is unavailable (no credits, down)',
 };
 
 function checkEnv(): Env | undefined {
@@ -338,6 +339,7 @@ async function checkAnthropic(env: Env): Promise<void> {
     } catch (error) {
       const message = errorMessage(error);
       const auth = /401|authentication|invalid x-api-key/i.test(message);
+      const credits = /credit balance is too low/i.test(message);
       const missingModel = /404|not_found|model/i.test(message);
       record({
         group: 'api',
@@ -346,9 +348,62 @@ async function checkAnthropic(env: Env): Promise<void> {
         detail: `${model}: ${message}`,
         fix: auth
           ? 'ANTHROPIC_API_KEY is rejected — regenerate it at console.anthropic.com/settings/keys.'
-          : missingModel
+          : credits
+            ? `Out of Anthropic credits — add some at console.anthropic.com/settings/billing.${
+                env.GEMINI_API_KEY ? ' Gemini is covering LLM calls meanwhile.' : ''
+              }`
+            : missingModel
             ? `Model "${model}" is not available to this key. Change the matching ANTHROPIC_MODEL* value in .env.`
             : 'Could not reach the Anthropic API — check network access.',
+      });
+    }
+  }
+}
+
+async function checkGemini(env: Env): Promise<void> {
+  if (!env.GEMINI_API_KEY) {
+    record({
+      group: 'api',
+      name: 'gemini fallback',
+      status: 'skip',
+      detail: 'GEMINI_API_KEY not set — no fallback when Anthropic is unavailable',
+    });
+    return;
+  }
+
+  const tiers = [
+    ['default', env.GEMINI_MODEL],
+    ['heavy', env.GEMINI_MODEL_HEAVY],
+    ['fast', env.GEMINI_MODEL_FAST],
+  ] as const;
+
+  for (const [tier, model] of tiers) {
+    try {
+      const { geminiPing } = await import('../lib/gemini.js');
+      const [result, ms] = await timed(() => geminiPing(tier));
+      record(
+        {
+          group: 'api',
+          name: `gemini ${tier}`,
+          status: result.ok ? 'pass' : 'warn',
+          detail: result.ok
+            ? `${model} responded (JSON mode)`
+            : `${model} responded, but not with the expected JSON`,
+        },
+        ms,
+      );
+    } catch (error) {
+      const message = errorMessage(error);
+      record({
+        group: 'api',
+        name: `gemini ${tier}`,
+        status: 'fail',
+        detail: `${model}: ${message}`,
+        fix: /\b40[13]\b|API key not valid|PERMISSION_DENIED/i.test(message)
+          ? 'GEMINI_API_KEY is rejected — create one at aistudio.google.com/apikey and run `npm run key -- --name GEMINI_API_KEY`.'
+          : /\b404\b|not found/i.test(message)
+            ? `Model "${model}" is not available to this key. Change the matching GEMINI_MODEL* value in .env.`
+            : 'Gemini call failed — see the error above.',
       });
     }
   }
@@ -595,6 +650,7 @@ async function main(): Promise<void> {
       record({ group: 'api', name: 'all api checks', status: 'skip', detail: '--skip-network' });
     } else {
       await checkAnthropic(env);
+      await checkGemini(env);
       await checkOptionalApis(env);
       await checkWhop(env);
     }

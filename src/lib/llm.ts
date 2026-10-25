@@ -3,6 +3,7 @@ import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { getEnv } from './env.js';
+import { geminiEnabled, sendGemini } from './gemini.js';
 import { createLogger } from './logger.js';
 
 /**
@@ -15,6 +16,10 @@ import { createLogger } from './logger.js';
  * schema you pass, then parses the tool input back through zod. If validation
  * fails the model is shown its own error and asked again, up to LLM_MAX_RETRIES.
  * Callers therefore never handle raw model text or hand-written JSON.parse.
+ *
+ * Anthropic is the provider. When it is unavailable (no credits, key rejected,
+ * rate-limited after retries, down) and GEMINI_API_KEY is set, the same call
+ * runs on Gemini instead (src/lib/gemini.ts). Result.model says which ran.
  */
 
 const log = createLogger('llm');
@@ -207,11 +212,55 @@ function scrub<T>(value: T): T {
   return value;
 }
 
+/** Which tier a call is on, so a fallback picks the matching Gemini model. */
+function tierOf(opts: { model?: string; tier?: ModelTier }): ModelTier {
+  if (opts.tier) return opts.tier;
+  const env = getEnv();
+  if (opts.model === env.ANTHROPIC_MODEL_FAST) return 'fast';
+  if (opts.model === env.ANTHROPIC_MODEL_HEAVY) return 'heavy';
+  return 'default';
+}
+
+/**
+ * Errors that mean "Anthropic can't serve us right now" rather than "this
+ * request is wrong". `sticky` ones (billing, auth) won't fix themselves within
+ * a run, so the rest of the process goes straight to Gemini.
+ */
+function anthropicUnavailable(error: unknown): { fallback: boolean; sticky: boolean } {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/credit balance is too low|billing/i.test(message)) return { fallback: true, sticky: true };
+  if (error instanceof Anthropic.APIConnectionError) return { fallback: true, sticky: false };
+  if (error instanceof Anthropic.APIError) {
+    const status = error.status ?? 0;
+    if (status === 401 || status === 403) return { fallback: true, sticky: true };
+    if (status === 429 || status === 529 || status >= 500) return { fallback: true, sticky: false };
+  }
+  if (/overloaded/i.test(message)) return { fallback: true, sticky: false };
+  return { fallback: false, sticky: false };
+}
+
+let anthropicDown = false;
+
 /** Streaming under the hood: long product-writing calls would otherwise time out. */
 async function send(
   params: Anthropic.MessageCreateParamsNonStreaming,
+  tier: ModelTier,
 ): Promise<Anthropic.Message> {
-  return anthropic().messages.stream(scrub(params)).finalMessage();
+  const clean = scrub(params);
+  if (anthropicDown && geminiEnabled()) return sendGemini(clean, tier);
+  try {
+    return await anthropic().messages.stream(clean).finalMessage();
+  } catch (error) {
+    const { fallback, sticky } = anthropicUnavailable(error);
+    if (!fallback || !geminiEnabled()) throw error;
+    if (sticky) anthropicDown = true;
+    log.warn(
+      `anthropic unavailable (${error instanceof Error ? error.message.slice(0, 160) : String(error)}) — ${
+        sticky ? 'switching to Gemini for the rest of this run' : 'using Gemini for this call'
+      }`,
+    );
+    return sendGemini(clean, tier);
+  }
 }
 
 /** Plain text completion. Use completeJSON whenever the output has a shape. */
@@ -226,13 +275,16 @@ export async function completeText(options: BaseOptions): Promise<LlmResult<stri
   ];
 
   const started = Date.now();
-  const message = await send({
-    model,
-    max_tokens: options.maxTokens ?? env.LLM_MAX_TOKENS,
-    temperature: options.temperature ?? 1,
-    system: options.system,
-    messages,
-  });
+  const message = await send(
+    {
+      model,
+      max_tokens: options.maxTokens ?? env.LLM_MAX_TOKENS,
+      temperature: options.temperature ?? 1,
+      system: options.system,
+      messages,
+    },
+    tierOf(options),
+  );
 
   const text = message.content
     .filter((block): block is Anthropic.TextBlock => block.type === 'text')
@@ -242,11 +294,17 @@ export async function completeText(options: BaseOptions): Promise<LlmResult<stri
 
   const usage = readUsage(message);
   log.debug(
-    `${label} · ${model} · ${usage.inputTokens}in/${usage.outputTokens}out · ${Date.now() - started}ms`,
+    `${label} · ${message.model} · ${usage.inputTokens}in/${usage.outputTokens}out · ${Date.now() - started}ms`,
   );
-  await trace(label, { model, system: options.system, prompt: options.prompt, text, usage });
+  await trace(label, {
+    model: message.model,
+    system: options.system,
+    prompt: options.prompt,
+    text,
+    usage,
+  });
 
-  return { data: text, model, usage, attempts: 1, stopReason: message.stop_reason };
+  return { data: text, model: message.model, usage, attempts: 1, stopReason: message.stop_reason };
 }
 
 /**
@@ -289,15 +347,18 @@ export async function completeJSON<T>(
 
   for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
     const started = Date.now();
-    const message = await send({
-      model,
-      max_tokens: options.maxTokens ?? env.LLM_MAX_TOKENS,
-      temperature: options.temperature ?? 1,
-      system: options.system,
-      messages,
-      tools: [tool],
-      tool_choice: { type: 'tool', name: toolName },
-    });
+    const message = await send(
+      {
+        model,
+        max_tokens: options.maxTokens ?? env.LLM_MAX_TOKENS,
+        temperature: options.temperature ?? 1,
+        system: options.system,
+        messages,
+        tools: [tool],
+        tool_choice: { type: 'tool', name: toolName },
+      },
+      tierOf(options),
+    );
 
     usage = addUsage(usage, readUsage(message));
 
@@ -323,10 +384,10 @@ export async function completeJSON<T>(
 
       if (parsed.success) {
         log.debug(
-          `${label} · ${model} · attempt ${attempt} · ${usage.inputTokens}in/${usage.outputTokens}out · ${Date.now() - started}ms`,
+          `${label} · ${message.model} · attempt ${attempt} · ${usage.inputTokens}in/${usage.outputTokens}out · ${Date.now() - started}ms`,
         );
         await trace(label, {
-          model,
+          model: message.model,
           system: options.system,
           prompt: options.prompt,
           data: parsed.data,
@@ -335,7 +396,7 @@ export async function completeJSON<T>(
         });
         return {
           data: parsed.data,
-          model,
+          model: message.model,
           usage,
           attempts: attempt,
           stopReason: message.stop_reason,

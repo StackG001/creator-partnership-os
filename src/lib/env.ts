@@ -31,6 +31,12 @@ export const envSchema = z.object({
   ANTHROPIC_MODEL_FAST: z.string().default('claude-haiku-4-5-20251001'),
   ANTHROPIC_BASE_URL: z.string().url().optional(),
 
+  // fallback provider — only used when Anthropic is unavailable (see src/lib/gemini.ts)
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-3.6-flash'),
+  GEMINI_MODEL_HEAVY: z.string().default('gemini-3.6-flash'),
+  GEMINI_MODEL_FAST: z.string().default('gemini-3.5-flash-lite'),
+
   // llm behaviour
   LLM_MAX_TOKENS: intFrom(8192),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
@@ -66,6 +72,7 @@ export const OPTIONAL_ENV_KEYS = [
   'WHOP_API_KEY',
   'WHOP_COMPANY_ID',
   'RESEND_API_KEY',
+  'GEMINI_API_KEY',
 ] as const;
 
 /** Blank strings in .env mean "unset", not "set to empty". */
