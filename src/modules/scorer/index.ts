@@ -69,6 +69,39 @@ function scoreEngagement(engagementRate: number | null, postsPerWeek: number | n
   return Math.round(clamp(base * cadenceFactor(postsPerWeek)));
 }
 
+// --- minor check ------------------------------------------------------------------
+
+type MinorFields = Partial<Pick<Creator, 'bio' | 'niche' | 'subNiche' | 'raw'>>;
+
+/** Recent video titles the finder stored on `raw` (YouTube only; empty otherwise). */
+function recentTitles(creator: MinorFields): string[] {
+  const videos = (creator.raw as { videos?: { title?: string }[] } | null)?.videos ?? [];
+  return videos.map((v) => v.title ?? '').filter(Boolean).slice(0, 15);
+}
+
+// First-person school-age signals only — "tips for 10th class students" from a
+// tutor, or med/law/grad school, must not match. The LLM catches fuzzier cases.
+const MINOR_PATTERNS: RegExp[] = [
+  /\bafter ?school (?:vlog|routine)\b/i,
+  /\bschool day in my life\b/i,
+  /\bi'?m (?:a |in )?(?:[4-9]th|1[0-2]th) ?(?:std|standard|grade|class)\b/i,
+  /\b(?:[4-9]th|1[0-2]th) ?(?:std|standard|grade|class) student\b/i,
+  /\bi'?m (?:a |in )?(?:high|middle|secondary) ?school(?:er| student)?\b/i,
+  /\b(?:sslc|plus (?:one|two)) student\b/i,
+];
+const AGE_IN_BIO = /\b(1[0-7]) ?(?:yo|y\/o|yrs? old|years? old)\b/i;
+
+/** Why this creator looks like a school-age child, or null. Bio/niche/titles only — never guesses from the face or name. */
+export function minorSignal(creator: MinorFields): string | null {
+  const texts = [creator.bio, creator.niche, creator.subNiche, ...recentTitles(creator)].filter(Boolean) as string[];
+  for (const t of texts) {
+    const m = MINOR_PATTERNS.map((re) => re.exec(t)).find(Boolean);
+    if (m) return `appears to be a minor: "${m[0]}" in "${t.slice(0, 80)}"`;
+  }
+  const age = creator.bio ? AGE_IN_BIO.exec(creator.bio) : null;
+  return age ? `appears to be a minor: "${age[0]}" in bio` : null;
+}
+
 // --- LLM half ------------------------------------------------------------------
 
 const ScoreLlmSchema = z.object({
@@ -77,6 +110,12 @@ const ScoreLlmSchema = z.object({
   monetisability: z.number().min(0).max(100).describe('How much this specific audience would plausibly pay for a done-for-you product.'),
   reachability: z.number().min(0).max(100).describe('How likely a cold outreach is to get a reply — contactability, apparent openness to partnerships, not already flooded with sponsors.'),
   rationale: z.string().describe('2-4 sentences on the overall verdict.'),
+  appearsMinor: z
+    .string()
+    .nullable()
+    .describe(
+      'Null unless the creator themselves looks under 18 — e.g. vlogs about their own school day, exams or class/grade. Quote the evidence. University, college, med school and teachers/tutors do NOT count.',
+    ),
   disqualifiedFor: z
     .string()
     .nullable()
@@ -84,7 +123,7 @@ const ScoreLlmSchema = z.object({
 });
 type ScoreLlm = z.infer<typeof ScoreLlmSchema>;
 
-async function scoreWithLlm(creator: Creator): Promise<ScoreLlm> {
+export async function scoreWithLlm(creator: Creator): Promise<ScoreLlm> {
   const system = [
     'You score micro-creator prospects for Creator Partnership OS — an internal tool that finds creators with engaged niche audiences and no digital product, and offers to build them one.',
     'Score each dimension 0-100 independently; do not anchor them to each other.',
@@ -101,6 +140,7 @@ async function scoreWithLlm(creator: Creator): Promise<ScoreLlm> {
     `Niche: ${creator.niche ?? '(unknown)'} ${creator.subNiche ? `/ ${creator.subNiche}` : ''}`,
     `Bio: ${creator.bio ?? '(empty)'}`,
     `Language/country: ${creator.language ?? '?'} / ${creator.country ?? '?'}`,
+    `Recent video titles: ${recentTitles(creator).join(' | ') || '(none stored)'}`,
     '',
     `Followers: ${creator.followers ?? 0}`,
     `Engagement rate: ${creator.engagementRate ? `${(creator.engagementRate * 100).toFixed(2)}%` : 'unknown'}`,
@@ -151,9 +191,13 @@ async function scoreOne(creator: Creator): Promise<ScoreResult> {
     (breakdown.nicheClarity + breakdown.productGap + breakdown.monetisability + breakdown.reachability) / 4;
   const score = Math.round(clamp(arithmeticAvg * 0.5 + llmAvg * 0.5));
 
-  const disqualifiedFor = creator.hasDigitalProduct
-    ? 'Already sells a digital product (flagged during discovery).'
-    : (llm.disqualifiedFor ?? undefined);
+  // A minor is never pitched, whatever else the score says.
+  const minor = minorSignal(creator) ?? (llm.appearsMinor ? `appears to be a minor: ${llm.appearsMinor}` : null);
+  const disqualifiedFor = minor
+    ? minor
+    : creator.hasDigitalProduct
+      ? 'Already sells a digital product (flagged during discovery).'
+      : (llm.disqualifiedFor ?? undefined);
 
   const nextStatus = disqualifiedFor
     ? 'DISQUALIFIED'

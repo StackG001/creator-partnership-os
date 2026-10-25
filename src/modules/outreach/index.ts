@@ -16,6 +16,7 @@ import {
 import fs from 'node:fs/promises';
 import { isSensitiveNiche, productLineFlags, SENSITIVE_PRODUCT_RULE } from '../../lib/productLine.js';
 import { domainAcceptsMail, isPlatformEmail } from '../../lib/sources/emailFinder.js';
+import { minorSignal } from '../scorer/index.js';
 import type { Prisma, Quote } from '@prisma/client';
 import {
   FOLLOW_UP,
@@ -118,10 +119,15 @@ async function loadAuditEvidence(creatorId: string): Promise<AuditEvidence> {
 // --- do not contact ---------------------------------------------------------------
 
 /** Retired or doNotContact creators get nothing from this system — no draft, approval, send or DM. */
-export function contactBlock(creator: { handle: string; status: string; doNotContact: boolean; retiredReason?: string | null }): string | null {
+export function contactBlock(
+  creator: { handle: string; status: string; doNotContact: boolean; retiredReason?: string | null } & Parameters<typeof minorSignal>[0],
+): string | null {
   if (creator.doNotContact) return `@${creator.handle} is do-not-contact (${creator.retiredReason ?? 'retired'}) — never contact again`;
   if (creator.status === 'RETIRED') return `@${creator.handle} is retired (${creator.retiredReason ?? 'no reason'})`;
   if (creator.status === 'DISQUALIFIED') return `@${creator.handle} is disqualified`;
+  // Scored before the minor check existed? Never pitch a child either way.
+  const minor = minorSignal(creator);
+  if (minor) return `@${creator.handle} ${minor}`;
   return null;
 }
 

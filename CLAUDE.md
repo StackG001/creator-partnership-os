@@ -114,6 +114,14 @@ in code before anything can send (`sendChecks`, `npm run outreach -- --check <id
   sending and marking a DM sent are all refused without it.
 - **Disqualified creators** (e.g. already sell a course/training) stay in the
   database so the finder never re-adds them, and drafting to them is refused.
+- **Never pitch a minor** (Gerald, 2026-10-25, after @craft_stories_by_isra —
+  a Kerala school student whose bio email was a parent's). The scorer
+  disqualifies anyone who looks under 18: `minorSignal` (first-person school
+  signals in bio/niche/recent video titles — "afterschool vlog", "I'm in 9th
+  grade", "16 yo") plus the LLM's `appearsMinor` (which now sees recent video
+  titles). University/med school and teachers/tutors don't count.
+  `contactBlock` re-runs `minorSignal`, so drafting/approving/sending refuse
+  them too, even if scored before the check existed.
 - **YouTube video descriptions are checked for an existing product too**
   (`videoDescriptionProduct` in `src/lib/sources/productSignals.ts`) — in the
   finder and again before seq 1 is drafted. Only explicit own-product claims
