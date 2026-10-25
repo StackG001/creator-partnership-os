@@ -293,7 +293,7 @@ export function firstNameFromDisplayName(rawDisplayName: string | null | undefin
   const withBy = /\b(?:with|by|from)\s+(\p{Lu}[\p{Ll}'’-]+)\b/iu.exec(part);
   if (withBy && isNameWord(withBy[1]!)) return withBy[1]!;
   const ws = part.split(/\s+/).filter(Boolean);
-  while (ws.length > 1 && TITLES.test(ws[0]!)) ws.shift();
+  while (ws.length > 1 && TITLES.test(ws[0]!.replace(/\.$/, ''))) ws.shift(); // "Dr." as well as "Dr"
   // One name word ("Emily", "Karina"), or "First Last" with no brand words ("Milo Meloy").
   if (ws.length === 1 && isNameWord(ws[0]!)) return ws[0]!;
   if (ws.length === 2 && isNameWord(ws[0]!) && isNameWord(ws[1]!)) return ws[0]!;
