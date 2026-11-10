@@ -24,6 +24,7 @@
     "funnel": "tsx src/modules/funnel/cli.ts",
     "publisher": "tsx src/modules/publisher/cli.ts",
     "deals": "tsx src/modules/deals/cli.ts",
+    "backup": "tsx src/scripts/backup.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",

@@ -339,6 +339,10 @@ page (phone + laptop, token in the URL): approved unsent DMs oldest first,
 profile), "Sent" (marks SENT now → follow-up clock starts), "Skip". Drafts
 needing a variant picked are listed with "Approve".
 
+After each part's summary, the database and `outputs/` are **backed up to Google
+Drive** (`npm run backup`); a failed backup shows as "⚠ BACKUP FAILED" in the
+summary but never fails the run.
+
 Daily summary → `outputs/_pipeline/latest.md` (rebuilt from the database
 after each part): new creators by niche, Apify today/cycle, cost per qualified
 creator, niches promoted/paused/retired, new niches tried, emails sent, held +
@@ -364,3 +368,25 @@ npm run deals -- --next @handle "text" --due YYYY-MM-DD
 npm run deals -- --ledger @handle --period YYYY-MM --gross 49.00 --fees 3.10 --refunds 0 --sales 2
 npm run deals -- --report                        # weekly; also in the Monday daily summary
 ```
+
+**Backup** (`src/lib/backup.ts`, `src/scripts/backup.ts`):
+- **What it backs up:** the database and `outputs/`, to Google Drive at
+  `My Drive/iClipmedia Backups/creator-partnership-os/`.
+- **How:** the database is copied with an online SQLite snapshot (`VACUUM
+  INTO`), then integrity-checked before anything reaches Drive. `outputs/` is
+  zipped.
+- **Retention:** keeps the last 14 of each, and deletes only its own older
+  files in that folder.
+- **Never backed up:** `.env`.
+- **Automatic:** it runs at the end of every daily pipeline part. A failure is
+  shown in the daily summary and never fails the run.
+- **Drive must be shared with Linux:** Files app → right-click "Google Drive" →
+  "Share with Linux". `BACKUP_DIR` overrides the target folder.
+
+```
+npm run backup                                    # back up now
+npm run backup -- --dry-run                       # what it would write/delete; writes nothing
+npm run backup -- --restore db-YYYY-MM-DD_HHMM.sqlite             # check that backup, show what would happen
+npm run backup -- --restore db-YYYY-MM-DD_HHMM.sqlite --confirm   # safety copy of the current db, then restore
+```
+

@@ -28,6 +28,7 @@ import { fetchPage } from '../../lib/sources/linkInBio.js';
 import { instagramDmHandle } from '../../lib/sources/instagramGoogle.js';
 import { QuoteSourceError } from '../../lib/quotes.js';
 import { creatorNiche } from '../../lib/creatorNiche.js';
+import { humanBytes, runBackup } from '../../lib/backup.js';
 import { findCreators } from '../finder/index.js';
 import { scoreCreator } from '../scorer/index.js';
 import { auditCreator } from '../audit/index.js';
@@ -718,16 +719,52 @@ async function runDailyPartLocked(
 
   state[key] = day;
   await writeState(state);
-  const summary = await renderDailySummary(day);
   const summaryPath = path.join(dir, `${day}-daily.md`);
-  await fs.writeFile(summaryPath, summary, 'utf8');
-  await fs.writeFile(path.join(dir, 'latest.md'), summary, 'utf8');
+  const writeSummary = async () => {
+    const summary = await renderDailySummary(day);
+    await fs.writeFile(summaryPath, summary, 'utf8');
+    await fs.writeFile(path.join(dir, 'latest.md'), summary, 'utf8');
+  };
+  await writeSummary();
+
+  // Back up to Google Drive after the summary. A failed backup is reported in the summary; it never fails the run.
+  let backup: StoredBackup;
+  try {
+    const b = await runBackup();
+    backup = { ok: true, at: new Date().toISOString(), dir: b.dir, dbFile: b.dbFile, dbBytes: b.dbBytes, zipFile: b.zipFile, zipBytes: b.zipBytes, integrity: b.check?.integrity, deals: b.check?.deals, creators: b.check?.creators, deleted: b.deleted.length };
+    log.info(`backup: ${b.dbFile} + ${b.zipFile} → ${b.dir}`);
+  } catch (error) {
+    backup = { ok: false, at: new Date().toISOString(), error: (error as Error).message };
+    log.error(`BACKUP FAILED: ${(error as Error).message}`);
+  }
+  const fresh = await prisma.pipelineRun.findUnique({ where: { id: run.id }, select: { details: true } });
+  await prisma.pipelineRun.update({
+    where: { id: run.id },
+    data: { details: JSON.parse(JSON.stringify({ ...((fresh?.details ?? {}) as object), backup })) },
+  });
+  await writeSummary();
   return { part, runId: run.id, summaryPath: toRelative(summaryPath) };
 }
 
 // --- the daily summary (built from the database, so both parts show) ---------------------------
 
+interface StoredBackup {
+  ok: boolean;
+  at: string;
+  error?: string;
+  dir?: string;
+  dbFile?: string;
+  dbBytes?: number | null;
+  zipFile?: string;
+  zipBytes?: number | null;
+  integrity?: string;
+  deals?: number;
+  creators?: number;
+  deleted?: number;
+}
+
 interface StoredDetails extends RunDetails {
+  backup?: StoredBackup;
   nicheEvents: NicheEvents & { generated?: string[] };
   retiredDrafts?: string[];
   followUps?: FollowUpDrafted[];
@@ -875,6 +912,21 @@ export async function renderDailySummary(day: string): Promise<string> {
   if (follow.length) {
     out.push('## Follow-ups drafted');
     for (const f of follow) out.push(`- @${f.handle} · seq ${f.sequence} ${f.channel}${f.switchedToEmail ? ' (switched to email)' : ''} — ${f.held ? `HELD: ${f.held}` : 'drafted'}`);
+    out.push('');
+  }
+
+  // Backups (npm run backup) — one per daily part, run after its summary
+  const backups = runs.map((r) => ({ platform: r.platform, b: d(r).backup })).filter((x) => x.b);
+  if (backups.length) {
+    out.push('## Backup to Google Drive');
+    for (const { platform, b } of backups) {
+      const part = platform === 'INSTAGRAM' ? 'instagram' : 'youtube';
+      out.push(
+        b!.ok
+          ? `- ${part}: ${b!.dbFile} (${humanBytes(b!.dbBytes ?? 0)}, integrity ${b!.integrity}, ${b!.deals} deals, ${b!.creators} creators) + ${b!.zipFile} (${humanBytes(b!.zipBytes ?? 0)})${b!.deleted ? ` · ${b!.deleted} old backup(s) removed` : ''}`
+          : `- **⚠ BACKUP FAILED (${part}, ${b!.at.slice(11, 16)}):** ${b!.error} — run \`npm run backup\` by hand.`,
+      );
+    }
     out.push('');
   }
 

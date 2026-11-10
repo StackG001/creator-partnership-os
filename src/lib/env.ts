@@ -56,6 +56,8 @@ export const envSchema = z.object({
 
   // local behaviour
   OUTPUTS_DIR: z.string().default('./outputs'),
+  // backup target folder; unset = My Drive/iClipmedia Backups/creator-partnership-os (Drive shared with Linux)
+  BACKUP_DIR: z.string().optional(),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   PLAYWRIGHT_CHROMIUM_PATH: z.string().optional(),
 });

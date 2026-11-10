@@ -163,6 +163,9 @@ npm run db:generate    # regenerate the Prisma client after a schema change
 npm run db:push        # sync the schema to SQLite without a migration
 npm run db:migrate     # create a named migration (use before the Supabase move)
 npm run db:studio      # browse the data at localhost:5555
+npm run backup         # database (SQLite snapshot + integrity check) + outputs/ zip → Google Drive, keeps 14
+npm run backup -- --dry-run
+npm run backup -- --restore db-YYYY-MM-DD_HHMM.sqlite --confirm   # safety copy of the current db first
 
 npm run typecheck      # tsc --noEmit
 npm run build          # next build
