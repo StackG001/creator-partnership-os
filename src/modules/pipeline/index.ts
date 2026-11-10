@@ -27,6 +27,7 @@ import { analyzeMonetization, videoDescriptionProduct } from '../../lib/sources/
 import { fetchPage } from '../../lib/sources/linkInBio.js';
 import { instagramDmHandle } from '../../lib/sources/instagramGoogle.js';
 import { QuoteSourceError } from '../../lib/quotes.js';
+import { creatorNiche } from '../../lib/creatorNiche.js';
 import { findCreators } from '../finder/index.js';
 import { scoreCreator } from '../scorer/index.js';
 import { auditCreator } from '../audit/index.js';
@@ -738,7 +739,7 @@ export async function renderDailySummary(day: string): Promise<string> {
   const d = (r: (typeof runs)[number]) => (r.details ?? {}) as unknown as StoredDetails;
   const out: string[] = [`# Daily pipeline — ${day}`, ''];
 
-  // New creators by niche
+  // New creators by the library niche whose search found them (niche-library accounting, not the creator's own niche)
   const start = new Date(`${day}T00:00:00`);
   const newCreators = await prisma.creator.findMany({
     where: { createdAt: { gte: start }, source: { notes: 'pipeline' } },
@@ -917,7 +918,6 @@ export async function qualifiedLeads(): Promise<QualifiedLead[]> {
     where: qualifiedLeadWhere,
     include: {
       deal: { select: { stage: true } },
-      source: { include: { nicheRef: true } },
       messages: { where: { status: { notIn: ['CANCELLED', 'SUPERSEDED'] } }, orderBy: [{ sequence: 'desc' }, { createdAt: 'desc' }] },
     },
     orderBy: { updatedAt: 'desc' },
@@ -943,7 +943,7 @@ export async function qualifiedLeads(): Promise<QualifiedLead[]> {
       handle: c.handle,
       platform: c.platform === 'INSTAGRAM' ? 'Instagram' : 'YouTube',
       link,
-      niche: c.source?.nicheRef?.name ?? c.niche?.slice(0, 60) ?? '—',
+      niche: creatorNiche(c),
       score: c.score,
       contact: email
         ? `email (${email})`

@@ -3,6 +3,7 @@ import { DealStageSchema } from '../../lib/constants.js';
 import {
   addLedgerEntry,
   day,
+  addNote,
   addPromo,
   getDeal,
   listDeals,
@@ -30,6 +31,7 @@ export const spec: CliSpec = {
     'npm run deals -- --agreement @emmarepairs sent --url https://claude.ai/artifact/… --date 2026-11-12',
     'npm run deals -- --terms @emmarepairs --share 50 --basis after_fees --window 2026-12-01:2026-12-14 --posts 3',
     'npm run deals -- --promo @emmarepairs --done +1',
+    'npm run deals -- --notes @uswa_arshad_ "Education niche — no medical claims"',
     'npm run deals -- --next @emmarepairs "send the outline" --due 2026-11-11',
     'npm run deals -- --ledger @emmarepairs --period 2026-12 --gross 49.00 --fees 3.10 --refunds 0 --sales 2',
     'npm run deals -- --report',
@@ -49,6 +51,8 @@ export const spec: CliSpec = {
     basis: { type: 'string', description: 'after_fees | gross.' },
     window: { type: 'string', description: 'Launch window YYYY-MM-DD:YYYY-MM-DD.' },
     posts: { type: 'string', description: 'Promo posts agreed for the launch window.' },
+    notes: { type: 'string', description: '@handle "text": add a dated note to the deal (--replace overwrites).' },
+    replace: { type: 'boolean', description: 'With --notes: replace the existing notes.' },
     promo: { type: 'string', description: '@handle: record promo posts done (with --done +1).' },
     done: { type: 'string', description: '+N, -N or N.' },
     next: { type: 'string', description: '@handle "text": set the next action (with optional --due).' },
@@ -107,6 +111,11 @@ await runCli(spec, async (ctx) => {
   if (str(f.terms)) {
     const d = await setTerms(str(f.terms)!, { share: str(f.share), basis: str(f.basis), window: str(f.window), posts: str(f.posts) });
     return print(`@${d.creator.handle}: creator ${d.creatorSharePct}% · ${d.feeBasis} · posts ${d.promoPostsDone}/${d.promoPostsAgreed ?? '—'}`);
+  }
+  if (str(f.notes)) {
+    if (!word) throw new Error('usage: --notes @handle "text" [--replace]');
+    const d = await addNote(str(f.notes)!, word, { replace: Boolean(f.replace) });
+    return print(`@${d.creator.handle}: notes —\n${d.notes}`);
   }
   if (str(f.promo)) {
     if (!str(f.done)) throw new Error('usage: --promo @handle --done +1');

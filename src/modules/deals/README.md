@@ -60,6 +60,7 @@ npm run deals -- --stage @handle --auto                  # back to auto-sync
 npm run deals -- --agreement @handle sent|signed|ended [--url …] [--date YYYY-MM-DD]
 npm run deals -- --terms @handle [--share 50] [--basis after_fees|gross] [--window YYYY-MM-DD:YYYY-MM-DD] [--posts N]
 npm run deals -- --promo @handle --done +1
+npm run deals -- --notes @handle "text" [--replace]           # dated note on the deal
 npm run deals -- --next @handle "text" --due YYYY-MM-DD
 npm run deals -- --ledger @handle --period YYYY-MM --gross 49.00 --fees 3.10 --refunds 0 --sales 2 [--note "…"]
 npm run deals -- --report

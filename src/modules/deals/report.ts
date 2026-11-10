@@ -63,7 +63,7 @@ export async function renderDealsReport(opts: { leadsTable?: boolean; now?: Date
       const left = (+d.endsAt - +today) / DAY_MS;
       if (left >= 0 && left <= PARTNERSHIP_TERMS.endingWarnDays) action.push(`- ${h}: agreement ends ${day(d.endsAt)} (renews yearly; ${PARTNERSHIP_TERMS.noticeDays} days' notice to end)`);
     }
-    if (d.termsFlag) action.push(`- ${h}: ⚠ terms guard — ${d.termsFlag}`);
+    if (d.termsFlag && d.stage !== 'LOST') action.push(`- ${h}: ⚠ terms guard — ${d.termsFlag}`);
   }
   out.push('## Deals needing action', ...(action.length ? action : ['Nothing needs action.']), '');
 

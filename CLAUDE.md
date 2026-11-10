@@ -45,7 +45,8 @@ Every run report, daily summary, and every reply to Gerald that mentions
 creators **ends with a "Qualified leads" table**: @handle, platform, profile
 link (instagram.com/<handle> or youtube.com/@<handle>), niche, score, contact
 method (email or DM), current status (drafted / held / sent / waiting for
-me) and deal stage (from the deals module). Include it even with one lead; with none, say "No qualified leads this
+me) and deal stage (from the deals module). The niche column is the creator's own profile niche
+(`Creator.niche`, via `creatorNiche()`), never the niche of the search that found them. Include it even with one lead; with none, say "No qualified leads this
 run". Generate it with `npm run pipeline -- --leads` (`qualifiedLeads()` /
 `renderLeadsTable()` in the pipeline module); the daily summary appends it
 automatically. Qualified = score ≥ `QUALIFICATION.minScore`, audited or
@@ -343,6 +344,7 @@ npm run deals -- --stage @handle AGREED [--note "…"]   # MANUAL (sync won't ov
 npm run deals -- --agreement @handle sent|signed|ended [--url …] [--date YYYY-MM-DD]
 npm run deals -- --terms @handle [--share 50] [--basis after_fees|gross] [--window YYYY-MM-DD:YYYY-MM-DD] [--posts N]
 npm run deals -- --promo @handle --done +1
+npm run deals -- --notes @handle "text" [--replace]           # dated note on the deal
 npm run deals -- --next @handle "text" --due YYYY-MM-DD
 npm run deals -- --ledger @handle --period YYYY-MM --gross 49.00 --fees 3.10 --refunds 0 --sales 2
 npm run deals -- --report                        # weekly; also in the Monday daily summary

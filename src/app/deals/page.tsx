@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/db';
 import { DEAL_STAGES, PARTNERSHIP_TERMS } from '../../lib/constants';
+import { creatorNiche } from '../../lib/creatorNiche';
 
 /**
  * Read-only deal board. Everything is changed from the CLI
@@ -59,7 +60,7 @@ export default async function Deals() {
                 return (
                   <article key={d.id} style={{ background: '#27272a', borderRadius: 6, padding: 10, marginBottom: 8, fontSize: 13, lineHeight: 1.45 }}>
                     <a href={profile} style={{ ...link, fontWeight: 600 }}>@{c.handle}</a>
-                    <div style={muted}>{c.niche?.slice(0, 60) ?? '—'} · {c.score ?? '—'}</div>
+                    <div style={muted}>{creatorNiche(c)} · {c.score ?? '—'}</div>
                     <div>
                       {d.agreementUrl ? <a href={d.agreementUrl} style={link}>{badge}</a> : <span>{badge}</span>}
                       {d.stageSource === 'MANUAL' ? <span style={muted}> · manual</span> : null}

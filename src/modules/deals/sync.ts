@@ -185,7 +185,10 @@ export async function syncDeals(opts: { dryRun?: boolean } = {}): Promise<SyncRe
     let target = d.stage;
     let flag: string | null = null;
     // Terms guard: nothing is built until both sides sign.
-    if (target === 'BUILDING' && !signed && PARTNERSHIP_TERMS.buildNeedsSignature) {
+    // A LOST deal is closed — nothing left to flag.
+    if (deal.stage === 'LOST') {
+      // no flag
+    } else if (target === 'BUILDING' && !signed && PARTNERSHIP_TERMS.buildNeedsSignature) {
       flag = FLAG_UNSIGNED_BUILD;
       target = stageRank(d.beforeBuild) < stageRank('AGREED') ? d.beforeBuild : 'AGREED';
     } else if (target === 'LAUNCHED' && !signed) {

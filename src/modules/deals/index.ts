@@ -10,6 +10,7 @@ import {
   type FeeBasis,
 } from '../../lib/constants.js';
 import { normalizeHandle } from '../../lib/paths.js';
+import { creatorNiche } from '../../lib/creatorNiche.js';
 import { addMonths, appendHistory, computeSplit, FLAG_UNSIGNED_BUILD, HAND_HANDLED_TAG, type HistoryEntry } from './sync.js';
 
 export { syncDeals, computeSplit, HAND_HANDLED_TAG } from './sync.js';
@@ -48,7 +49,7 @@ export function usd(cents: number): string {
 // --- lookups -----------------------------------------------------------------------------------
 
 const dealInclude = {
-  creator: { include: { source: { include: { nicheRef: true } } } },
+  creator: true,
   product: true,
   launch: true,
   ledger: { orderBy: [{ period: 'asc' }, { source: 'asc' }] },
@@ -80,9 +81,7 @@ export function profileLink(c: { platform: string; handle: string; profileUrl: s
     : (c.profileUrl ?? `youtube.com/@${c.handle}`).replace(/^https?:\/\/(www\.)?/, '');
 }
 
-export function nicheOf(c: DealFull['creator']): string {
-  return c.niche?.slice(0, 60) ?? c.source?.nicheRef?.name ?? '—';
-}
+export const nicheOf = (c: DealFull['creator']): string => creatorNiche(c);
 
 // --- manual changes ----------------------------------------------------------------------------
 
@@ -108,7 +107,8 @@ export async function setStage(handle: string, raw: string, opts: { note?: strin
       stage,
       stageSource: 'MANUAL',
       lostReason: stage === 'LOST' ? (opts.note ?? deal.lostReason) : null,
-      termsFlag: stage === 'BUILDING' ? null : deal.termsFlag,
+      // a closed or properly signed deal has nothing left for the terms guard to flag
+      termsFlag: stage === 'BUILDING' || stage === 'LOST' ? null : deal.termsFlag,
       stageHistory: appendHistory(deal.stageHistory, { stage, at: new Date().toISOString(), by: 'manual', note: opts.note }),
     },
   });
@@ -167,6 +167,16 @@ export async function setTerms(
   }
   if (!Object.keys(data).length) throw new Error('pass at least one of --share, --basis, --window, --posts.');
   await prisma.deal.update({ where: { id: deal.id }, data });
+  return getDeal(handle);
+}
+
+/** Deal notes: --notes @handle "text" adds a dated line; --replace overwrites. */
+export async function addNote(handle: string, text: string, opts: { replace?: boolean } = {}): Promise<DealFull> {
+  const deal = await getDeal(handle);
+  if (!text.trim()) throw new Error('note text is empty.');
+  const line = `${day(new Date())}: ${text.trim()}`;
+  const notes = opts.replace || !deal.notes ? line : `${deal.notes}\n${line}`;
+  await prisma.deal.update({ where: { id: deal.id }, data: { notes } });
   return getDeal(handle);
 }
 
@@ -255,7 +265,7 @@ export function renderShow(d: DealFull): string[] {
     `- Terms: creator ${d.creatorSharePct}% · fee basis ${d.feeBasis}${d.feeBasis === PARTNERSHIP_TERMS.feeBasis && !PARTNERSHIP_TERMS.feeBasisConfirmed ? ' (default, not yet confirmed in Whop)' : ''}`,
     `- Launch window: ${d.launchWindowStart ? `${day(d.launchWindowStart)} → ${day(d.launchWindowEnd)}` : '—'} · promo posts ${d.promoPostsDone}/${d.promoPostsAgreed ?? '—'}`,
     `- Product: ${d.product ? `${d.product.title} (${d.product.status})` : '—'} · Launch: ${d.launch ? `${d.launch.status}${d.launch.url ? ` ${d.launch.url}` : ''}` : '—'}`,
-    d.notes ? `- Notes: ${d.notes}` : '',
+    d.notes ? `- Notes:\n${d.notes.split('\n').map((l) => `  - ${l}`).join('\n')}` : '',
     '',
     '## Stage history',
   ].filter((l, i, a) => l !== '' || a[i - 1] !== '');
