@@ -231,10 +231,10 @@ export async function buildFunnel(
   const { product, outline } = await loadProduct(creator.id, productId);
 
   const otherOpportunities = evidence.productOpportunities.filter((o) => !o.recommended);
-  const bumpIdea = 'a printable one-page quick-reference version of the core timing table(s) from the guide';
+  const bumpIdea = 'a printable quick-reference pack: the guide\'s key reference table(s) and checklists on one page each';
   const upsellIdea = otherOpportunities[0]
     ? `${otherOpportunities[0].title} — ${otherOpportunities[0].promise}`
-    : 'a 1:1 troubleshooting session to fix their specific kitchen/schedule';
+    : 'a 1:1 troubleshooting session for their specific problem';
 
   log.info(`writing sales page + order bump + upsell for "${outline.title}"`);
   const generated = await generateCopy(evidence, outline, bumpIdea, upsellIdea);

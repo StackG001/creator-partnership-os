@@ -122,39 +122,45 @@ const ClaimSchema = z.object({
 const ClaimsSchema = z.object({ claims: z.array(ClaimSchema) });
 export type Claim = z.infer<typeof ClaimSchema>;
 
+const QueriesSchema = z.object({
+  queries: z
+    .array(z.string().min(8).max(120))
+    .min(15)
+    .max(25)
+    .describe('web search queries, each a few plain words a person would type into Google'),
+});
+
 /**
- * Hand-authored, not LLM-brainstormed: these map directly onto the content the
- * product must cover (timing tables, temperature adjustment, fridge-to-loaf,
- * make-ahead/freeze points) plus the pains from the audit, so the query list
- * doesn't need a research pass of its own to be well-targeted.
+ * Search queries for this product, written from the creator's niche, the chosen
+ * product and the audience's real pains (one cheap call), so any niche gets
+ * research aimed at its own problems. Pains are also searched directly.
  */
-function researchQueries(opportunity: ProductOpportunity, evidence: AuditEvidence): string[] {
-  return [
-    'sourdough starter feeding schedule maintenance working full time',
-    'sourdough starter phases rise fall float test explained',
-    'sourdough fridge cold retard timing temperature guide',
-    'cold retard sourdough temperature chart 38 40 degrees fahrenheit',
-    'sourdough same day bake fast schedule no overnight',
-    'sourdough overnight bulk ferment room temperature schedule',
-    'unfed sourdough starter straight from fridge to dough discard',
-    "sourdough baker's percentage hydration ratio guide",
-    'sourdough bulk fermentation temperature time relationship rule of thumb',
-    'sourdough proofing temperature chart room temperature vs cold',
-    'freeze sourdough dough before baking shaped par proofed',
-    'freeze baked sourdough bread reheat crust',
-    'make ahead sourdough shape freeze bake later weekend',
-    'sourdough enriched dough bulk ferment timing brioche sandwich bread',
-    'sourdough troubleshooting dense crumb no oven spring causes',
-    'sourdough troubleshooting gummy crumb underbaked fix',
-    'sourdough scoring ear technique blade angle',
-    'sourdough baking schedule busy full time job nine to five',
-    'sourdough weeknight baking schedule after work',
-    'sourdough cold kitchen winter proofing temperature tips',
-    'sourdough dutch oven vs proofing box steam comparison',
-    'sourdough pizza dough make ahead fridge schedule',
-    `sourdough ${opportunity.whoItsFor}`,
-    `sourdough troubleshooting ${evidence.top10Pains[0]?.pain ?? ''}`,
-  ].map((q) => q.trim()).filter(Boolean);
+async function researchQueries(opportunity: ProductOpportunity, evidence: AuditEvidence, safety: boolean): Promise<string[]> {
+  const { data } = await completeJSON({
+    system: [
+      'You plan the web research for a practical how-to guide. Write search queries that will surface concrete, checkable facts: numbers, specs, settings, measurements, step orders, parts, tools, costs, common mistakes and fixes.',
+      'Cover the whole product, not one corner of it: the beginner\'s starting point, each main problem the audience reports, troubleshooting, tools/parts/materials, and what experienced people do differently.',
+      'Use the vocabulary people in this niche actually search with (model numbers, technique names, part names). No questions about the creator themself.',
+      safety ? 'This is a safety-advice niche: include queries for the correct safety procedures (isolation, discharging, protective steps) for the risky tasks.' : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    prompt: [
+      `Niche: ${evidence.niche}`,
+      `Product: "${opportunity.title}" — ${opportunity.promise}`,
+      `For: ${opportunity.whoItsFor}`,
+      `Audience: ${evidence.audiencePersona.who} — ${evidence.audiencePersona.situation}. Already tried: ${evidence.audiencePersona.triedAlready}`,
+      'Audience pains (from real comments):',
+      ...evidence.top10Pains.slice(0, 10).map((p) => `- ${p.pain}`),
+    ].join('\n'),
+    schema: QueriesSchema,
+    schemaName: 'research_queries',
+    tier: 'fast',
+    label: 'product:research-queries',
+    maxTokens: 2048,
+  });
+  const fromPains = evidence.top10Pains.slice(0, 3).map((p) => `${evidence.niche.split(/[—,.(]/)[0]!.trim()} ${p.pain}`.slice(0, 120));
+  return [...new Set([...data.queries, ...fromPains].map((q) => q.trim()).filter(Boolean))];
 }
 
 function dedupeSources(results: Array<{ query: string; result: SearchResult }>): Source[] {
@@ -173,8 +179,9 @@ function dedupeSources(results: Array<{ query: string; result: SearchResult }>):
 async function runResearch(
   opportunity: ProductOpportunity,
   evidence: AuditEvidence,
+  safety = false,
 ): Promise<{ sources: Source[]; claims: Claim[] }> {
-  const queries = researchQueries(opportunity, evidence);
+  const queries = await researchQueries(opportunity, evidence, safety);
   log.info(`research: ${queries.length} search queries`);
 
   const raw: Array<{ query: string; result: SearchResult }> = [];
@@ -198,7 +205,7 @@ async function runResearch(
     chunks.map(async (chunk, i) => {
       const { data } = await completeJSON({
         system: [
-          'Extract concrete, usable facts from these search-result snippets for a baking guide about scheduling sourdough around a full-time job.',
+          `Extract concrete, usable facts from these search-result snippets for a practical guide in this niche: ${evidence.niche}. The guide: "${opportunity.title}" — ${opportunity.promise}`,
           'Only extract facts that are actually stated in the snippet text — numbers, ranges, techniques, rules of thumb. Do not infer beyond what is written.',
           'Every claim must cite the sourceIds (the numeric id) of every snippet that supports it. Skip snippets with nothing concrete to extract.',
         ].join('\n'),
@@ -228,8 +235,8 @@ const ChapterPlanSchema = z.object({
   title: z.string(),
   goal: z.string().describe('what the reader can do after this chapter that they could not before'),
   sections: z.array(z.object({ heading: z.string(), keyPoints: z.array(z.string()).min(2).max(4) })).min(2).max(4),
-  includesTable: z.boolean().describe('true if this chapter should include a timing/temperature/schedule table'),
-  includesFreezePoint: z.boolean().describe('true if this chapter should include a make-ahead/freeze callout'),
+  includesTable: z.boolean().describe('true if this chapter should include a reference table (specs, settings, measurements, timings, comparisons or parts — whatever this niche actually uses)'),
+  includesTroubleshooting: z.boolean().describe('true if this chapter should include a symptom → cause → fix troubleshooting block'),
   targetWords: z.number().min(600).max(2200),
 });
 
@@ -269,7 +276,7 @@ async function runOutline(
   const baseSystem = [
     'You are outlining a research-backed digital product (a 35-50 page guide, rendered as a branded PDF) for Creator Partnership OS.',
     'The product must read as ONE coherent transformation, not a loose pile of tips: map exactly where the reader is stuck now, where they end up, and the bridges between.',
-    'Ground every chapter in the audience\'s actual stated pains and situation — do not write a generic sourdough book.',
+    'Ground every chapter in the audience\'s actual stated pains and situation — never a generic book about the topic.',
     safety ? SAFETY_PRODUCT_RULE : '',
   ]
     .filter(Boolean)
@@ -315,7 +322,8 @@ async function runOutline(
     ...claims.slice(0, 40).map((c) => `- ${c.claim}`),
     '',
     `Plan 7-9 chapters whose targetWords sum to roughly ${targetWords} words (a ${Math.round(targetWords / PRODUCT_SPEC.wordsPerPage)}-page PDF).`,
-    'Across the chapters (not all in one place) you MUST cover: timing tables, temperature adjustment guidance, fridge-to-loaf schedules, and make-ahead/freeze points — mark the chapters that carry each with includesTable / includesFreezePoint.',
+    `Niche: ${evidence.niche}`,
+    'Across the chapters (not all in one place) you MUST cover: at least two reference tables with specific values from the research (mark them includesTable), a symptom → cause → fix troubleshooting path for the problems the audience reports (includesTroubleshooting), and a step order the reader can follow from start to finish.',
   ].join('\n');
 
   const { data: chaptersData } = await completeJSON({
@@ -348,7 +356,7 @@ const BlockSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('callout'),
-    label: z.string().describe('e.g. "Make ahead", "Freeze point", "Cold kitchen fix"'),
+    label: z.string().describe('e.g. "Quick fix", "Common mistake", "Before you start", "Safety first"'),
     text: z.string(),
   }),
 ]);
@@ -429,12 +437,12 @@ async function writeChapter(
     `- Never use these words: ${evidence.voiceGuide.neverUsesWords.join(', ') || '—'}`,
     `- Emoji: ${evidence.voiceGuide.emojiUsage}`,
     `- This chapter is ${chapterIndex + 1} of ${totalChapters} — write in second person ("you"), as if the reader bought this because they trust this creator.`,
-    'Use ONLY the content blocks in the schema. Weave research claims in naturally (no academic citation style — just state the fact as something you know). Never invent a specific number that is not in the provided claims; when you need a number not in the claims, give a reasoned range and say it depends on their kitchen.',
+    'Use ONLY the content blocks in the schema. Weave research claims in naturally (no academic citation style — just state the fact as something you know). Never invent a specific number that is not in the provided claims; when you need a number not in the claims, give a reasoned range and say what it depends on.',
     chapterPlan.includesTable
-      ? 'This chapter MUST include at least one `table` block — a real timing/temperature/schedule table with specific values from the claims provided.'
+      ? 'This chapter MUST include at least one `table` block — a real reference table (specs, settings, measurements, timings, comparisons or parts) with specific values from the claims provided.'
       : '',
-    chapterPlan.includesFreezePoint
-      ? 'This chapter MUST include at least one `callout` block labeled about make-ahead or freezing.'
+    chapterPlan.includesTroubleshooting
+      ? 'This chapter MUST include a symptom → cause → fix troubleshooting block (a `table` or a `callout` labelled "Troubleshooting").'
       : '',
     `Target length: roughly ${chapterPlan.targetWords} words across all blocks.`,
     safety ? SAFETY_PRODUCT_RULE : '',
@@ -590,7 +598,7 @@ function buildHtml(input: {
   ${chaptersHtml}
   <section class="reading">
     <h1>Further Reading &amp; Sources</h1>
-    <p>This guide draws on ${furtherReading.length}+ baking resources, forums and technique guides. A selection for further reading:</p>
+    <p>This guide draws on ${furtherReading.length}+ resources, forums and technique guides. A selection for further reading:</p>
     <ul>${readingHtml}</ul>
   </section>
 </body>
@@ -709,7 +717,7 @@ export async function buildProduct(
     log.info(`research: using cached ${sources.length} sources (pass refresh to re-fetch)`);
   } else {
     log.info('research: fetching (this is the expensive stage — ~20 search queries)');
-    const result = await runResearch(opportunity, evidence);
+    const result = await runResearch(opportunity, evidence, safety);
     sources = result.sources;
     claims = result.claims;
     await fs.writeFile(sourcesPath, JSON.stringify(sources, null, 2), 'utf8');
