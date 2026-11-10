@@ -44,8 +44,8 @@ No rows were deleted — they stay so the finder can dedupe against them.
 Every run report, daily summary, and every reply to Gerald that mentions
 creators **ends with a "Qualified leads" table**: @handle, platform, profile
 link (instagram.com/<handle> or youtube.com/@<handle>), niche, score, contact
-method (email or DM), and current status (drafted / held / sent / waiting for
-me). Include it even with one lead; with none, say "No qualified leads this
+method (email or DM), current status (drafted / held / sent / waiting for
+me) and deal stage (from the deals module). Include it even with one lead; with none, say "No qualified leads this
 run". Generate it with `npm run pipeline -- --leads` (`qualifiedLeads()` /
 `renderLeadsTable()` in the pipeline module); the daily summary appends it
 automatically. Qualified = score ≥ `QUALIFICATION.minScore`, audited or
@@ -186,7 +186,7 @@ any UI. A module is not done until its CLI works. `src/lib/cli.ts` gives each
 one flag parsing, generated `--help`, env validation and exit codes — use
 `runCli(spec, handler)`, don't hand-roll argv parsing.
 
-**Module layout.** `src/modules/{finder,scorer,audit,outreach,product,brand,funnel,publisher,pipeline}/`
+**Module layout.** `src/modules/{finder,scorer,audit,outreach,product,brand,funnel,publisher,pipeline,deals}/`
 with `cli.ts` (entry point + flags), `index.ts` (the typed functions, no argv
 knowledge) and `README.md`. CLI parses, `index.ts` does the work.
 
@@ -206,6 +206,9 @@ in `src/lib/paths.ts`; store the path in the database alongside the data.
 allowed values live in `src/lib/constants.ts` — change one, change the other.
 Money is always integer cents. LLM-shaped output goes in a `Json` column plus a
 file on disk.
+
+**Deal defaults and checks follow docs/partnership-terms.md — update both together.**
+(`PARTNERSHIP_TERMS` in `src/lib/constants.ts` mirrors it in code.)
 
 **Nothing external happens implicitly.** Outreach messages stay `DRAFT` until a
 human approves them; the publisher supports `--dry-run` and prints its payload.
@@ -329,3 +332,18 @@ why, DMs waiting (queue link), replies logged.
 
 `npm run doctor` first — it checks every env var, the database, Chromium and
 every API connection. See README.md for the full command list.
+
+**Deals** (`src/modules/deals`, board at `/deals`). Local database only: no
+outreach, no Whop or Apify calls.
+```
+npm run deals -- --sync                          # create/advance deals from existing data + this month's ledger rows
+npm run deals -- --list [--stage REPLIED]
+npm run deals -- --show @handle
+npm run deals -- --stage @handle AGREED [--note "…"]   # MANUAL (sync won't overwrite); --auto hands it back; BUILDING needs a SIGNED agreement
+npm run deals -- --agreement @handle sent|signed|ended [--url …] [--date YYYY-MM-DD]
+npm run deals -- --terms @handle [--share 50] [--basis after_fees|gross] [--window YYYY-MM-DD:YYYY-MM-DD] [--posts N]
+npm run deals -- --promo @handle --done +1
+npm run deals -- --next @handle "text" --due YYYY-MM-DD
+npm run deals -- --ledger @handle --period YYYY-MM --gross 49.00 --fees 3.10 --refunds 0 --sales 2
+npm run deals -- --report                        # weekly; also in the Monday daily summary
+```

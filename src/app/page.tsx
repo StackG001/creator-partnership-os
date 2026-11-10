@@ -12,6 +12,7 @@ const PIPELINE = [
   ['product', 'Write and render the 35-50 page branded PDF'],
   ['funnel', 'Sales page, order bump, upsell'],
   ['publisher', 'Publish on Whop with revenue share, log results'],
+  ['deals', 'Track every deal from first find to monthly payout (board at /deals)'],
 ] as const;
 
 export default function Home() {

@@ -24,6 +24,8 @@ export interface CliSpec {
   /** Example invocations, shown under --help. */
   examples?: string[];
   flags: Record<string, FlagSpec>;
+  /** Accept bare words after a flag's value (e.g. `--stage @handle AGREED`); they arrive as ctx.positionals. */
+  allowPositionals?: boolean;
 }
 
 export type ParsedFlags = Record<string, string | boolean | undefined>;
@@ -72,6 +74,11 @@ export function renderHelp(spec: CliSpec): string {
  * flag with the help text attached.
  */
 export function parseFlags(spec: CliSpec, argv = process.argv.slice(2)): ParsedFlags {
+  return parseCli(spec, argv).values;
+}
+
+/** parseFlags plus any positionals (only when spec.allowPositionals). */
+export function parseCli(spec: CliSpec, argv = process.argv.slice(2)): { values: ParsedFlags; positionals: string[] } {
   const flags = { ...spec.flags, ...COMMON_FLAGS };
   const options = Object.fromEntries(
     Object.entries(flags).map(([name, flag]) => [
@@ -85,9 +92,11 @@ export function parseFlags(spec: CliSpec, argv = process.argv.slice(2)): ParsedF
   );
 
   let values: ParsedFlags;
+  let positionals: string[];
   try {
-    ({ values } = parseArgs({ args: argv, options, allowPositionals: false }) as {
+    ({ values, positionals } = parseArgs({ args: argv, options, allowPositionals: spec.allowPositionals === true }) as {
       values: ParsedFlags;
+      positionals: string[];
     });
   } catch (error) {
     console.error(`${(error as Error).message}\n\n${renderHelp(spec)}`);
@@ -108,11 +117,12 @@ export function parseFlags(spec: CliSpec, argv = process.argv.slice(2)): ParsedF
     process.exit(1);
   }
 
-  return values;
+  return { values, positionals };
 }
 
 export interface CliContext {
   flags: ParsedFlags;
+  positionals: string[];
   log: ReturnType<typeof createLogger>;
   dryRun: boolean;
   json: boolean;
@@ -123,7 +133,7 @@ export async function runCli(
   spec: CliSpec,
   handler: (ctx: CliContext) => Promise<void>,
 ): Promise<void> {
-  const flags = parseFlags(spec);
+  const { values: flags, positionals } = parseCli(spec);
   const log = createLogger(spec.name);
 
   const env = loadEnv();
@@ -139,6 +149,7 @@ export async function runCli(
   try {
     await handler({
       flags,
+      positionals,
       log,
       dryRun: flags['dry-run'] === true,
       json: flags.json === true,

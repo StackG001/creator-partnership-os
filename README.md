@@ -139,6 +139,18 @@ npm run funnel -- --handle jamesclearcoffee --price 3700 --bump-price 1700 --ups
 npm run publisher -- --handle jamesclearcoffee --rev-share 50
 npm run publisher -- --handle jamesclearcoffee --dry-run
 npm run publisher -- --sync-stats
+
+# 9. track every deal from first find to monthly payout (local database only; board at /deals)
+npm run deals -- --sync
+npm run deals -- --list --stage REPLIED
+npm run deals -- --show @handle
+npm run deals -- --stage @handle AGREED --note "said yes"
+npm run deals -- --agreement @handle signed --url https://… --date 2026-11-12
+npm run deals -- --terms @handle --window 2026-12-01:2026-12-14 --posts 3
+npm run deals -- --promo @handle --done +1
+npm run deals -- --next @handle "send the outline" --due 2026-11-11
+npm run deals -- --ledger @handle --period 2026-12 --gross 49.00 --fees 3.10 --refunds 0 --sales 2
+npm run deals -- --report
 ```
 
 Two flags work everywhere: `--dry-run` (no database writes, no paid API calls)

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { Creator } from '@prisma/client';
+import type { Creator, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/db.js';
 import { createLogger } from '../../lib/logger.js';
 import { outputsRoot, toRelative } from '../../lib/paths.js';
@@ -879,6 +879,11 @@ export async function renderDailySummary(day: string): Promise<string> {
 
   out.push(...(await measuredVsEstimate()));
   out.push('');
+  // Mondays: the weekly deals report (its own leads table is left off — this summary ends with it).
+  if (new Date(`${day}T12:00:00`).getDay() === 1) {
+    const { renderDealsReport } = await import('../deals/report.js');
+    out.push(await renderDealsReport({ leadsTable: false }), '');
+  }
   out.push(...renderLeadsTable(await qualifiedLeads()));
   return out.join('\n');
 }
@@ -893,20 +898,25 @@ export interface QualifiedLead {
   score: number | null;
   contact: string;
   status: string;
+  /** Deal stage from the deals module (`npm run deals -- --sync`), or "—" before the first sync. */
+  dealStage: string;
 }
 
 /**
  * Every qualified creator still in play: cleared the score bar, audited or further,
  * not retired / do-not-contact. Status from their newest live message.
  */
+export const qualifiedLeadWhere = {
+  score: { gte: QUALIFICATION.minScore },
+  status: { in: ['AUDITED', 'CONTACTED', 'REPLIED', 'AGREED', 'LAUNCHED'] },
+  doNotContact: false,
+} satisfies Prisma.CreatorWhereInput;
+
 export async function qualifiedLeads(): Promise<QualifiedLead[]> {
   const creators = await prisma.creator.findMany({
-    where: {
-      score: { gte: QUALIFICATION.minScore },
-      status: { in: ['AUDITED', 'CONTACTED', 'REPLIED', 'AGREED', 'LAUNCHED'] },
-      doNotContact: false,
-    },
+    where: qualifiedLeadWhere,
     include: {
+      deal: { select: { stage: true } },
       source: { include: { nicheRef: true } },
       messages: { where: { status: { notIn: ['CANCELLED', 'SUPERSEDED'] } }, orderBy: [{ sequence: 'desc' }, { createdAt: 'desc' }] },
     },
@@ -941,6 +951,7 @@ export async function qualifiedLeads(): Promise<QualifiedLead[]> {
           ? `DM (Instagram @${instagramDmHandle(c)})`
           : 'none found — no email or Instagram',
       status,
+      dealStage: c.deal?.stage ?? '—',
     };
   });
 }
@@ -948,9 +959,9 @@ export async function qualifiedLeads(): Promise<QualifiedLead[]> {
 export function renderLeadsTable(leads: QualifiedLead[]): string[] {
   const out = ['## Qualified leads'];
   if (!leads.length) return [...out, 'No qualified leads this run.'];
-  out.push('| @handle | Platform | Profile | Niche | Score | Contact | Status |', '|---|---|---|---|---|---|---|');
+  out.push('| @handle | Platform | Profile | Niche | Score | Contact | Status | Deal |', '|---|---|---|---|---|---|---|---|');
   for (const l of leads) {
-    out.push(`| @${l.handle} | ${l.platform} | ${l.link} | ${l.niche} | ${l.score ?? '—'} | ${l.contact} | ${l.status} |`);
+    out.push(`| @${l.handle} | ${l.platform} | ${l.link} | ${l.niche} | ${l.score ?? '—'} | ${l.contact} | ${l.status} | ${l.dealStage} |`);
   }
   return out;
 }

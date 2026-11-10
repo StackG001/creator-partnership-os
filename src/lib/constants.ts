@@ -4,6 +4,8 @@
  * value here and change the comment on the matching Prisma field.
  */
 
+import { z } from 'zod';
+
 export const PLATFORMS = ['INSTAGRAM', 'YOUTUBE', 'BOTH'] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
@@ -320,4 +322,59 @@ export const PIPELINE = {
      */
     auditCostSince: '2026-10-16',
   },
+} as const;
+
+// --- deals (src/modules/deals) -------------------------------------------------------------
+
+/** Deal pipeline, in order. Auto-sync only moves a deal forward along this list; LOST is off to the side. */
+export const DEAL_STAGES = ['FOUND', 'PITCHED', 'REPLIED', 'AGREED', 'BUILDING', 'LAUNCHED', 'LOST'] as const;
+export type DealStage = (typeof DEAL_STAGES)[number];
+export const DealStageSchema = z.enum(DEAL_STAGES);
+
+/** MANUAL stops auto-sync from overwriting a deal's stage. */
+export const STAGE_SOURCES = ['AUTO', 'MANUAL'] as const;
+export type StageSource = (typeof STAGE_SOURCES)[number];
+export const StageSourceSchema = z.enum(STAGE_SOURCES);
+
+export const AGREEMENT_STATUSES = ['NONE', 'SENT', 'SIGNED', 'ENDED'] as const;
+export type AgreementStatus = (typeof AGREEMENT_STATUSES)[number];
+export const AgreementStatusSchema = z.enum(AGREEMENT_STATUSES);
+
+/** AFTER_FEES: the creator's share is of what is left after Whop's fee. GROSS: of the sale price (less refunds). */
+export const FEE_BASES = ['AFTER_FEES', 'GROSS'] as const;
+export type FeeBasis = (typeof FEE_BASES)[number];
+export const FeeBasisSchema = z.enum(FEE_BASES);
+
+export const SPLIT_SOURCES = ['WHOP_SYNC', 'MANUAL'] as const;
+export type SplitSource = (typeof SPLIT_SOURCES)[number];
+export const SplitSourceSchema = z.enum(SPLIT_SOURCES);
+
+/**
+ * The Creator Partnership terms in code. docs/partnership-terms.md is the
+ * source of truth — change one, change the other.
+ */
+export const PARTNERSHIP_TERMS = {
+  docs: {
+    onePageOffer: 'https://claude.ai/artifact/5PKrSRp6LBHre2G5stSNq3',
+    agreementTemplate: 'https://claude.ai/artifact/ULQS4taw2AyofeTUh3FZjp',
+    servicesQuote: 'https://claude.ai/artifact/MsweDmqjJaDG7VfcsFXgGJ',
+  },
+  /** Creator's share of each sale made through their Whop affiliate link. */
+  creatorSharePct: 50,
+  /** Still to be confirmed in Whop — the report says so while this is the basis in use. */
+  feeBasis: 'AFTER_FEES' as FeeBasis,
+  feeBasisConfirmed: false,
+  /** The creator approves the idea and the final product within this many days of each request. */
+  approvalDays: 7,
+  /** Agreement length from launch; renews yearly. */
+  termMonths: 12,
+  noticeDays: 30,
+  /** "Nothing is built until both sides sign." */
+  buildNeedsSignature: true,
+  /** Report: an agreement SENT this long ago and not signed needs chasing. */
+  chaseUnsignedAfterDays: 7,
+  /** Report: launch windows ending this soon with posts still owed. */
+  launchWindowWarnDays: 7,
+  /** Report: agreements ending this soon. */
+  endingWarnDays: 30,
 } as const;

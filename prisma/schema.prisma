@@ -140,6 +140,7 @@ model Creator {
   products Product[]
   messages OutreachMessage[]
   launches Launch[]
+  deal     Deal?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -254,6 +255,7 @@ model Product {
   costCents Int?
 
   launches Launch[]
+  deals    Deal[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -329,6 +331,8 @@ model Launch {
   notes String?
   raw   Json? // last provider payload
 
+  deals Deal[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -398,4 +402,73 @@ model PipelineRun {
   details     Json? // searches, creators, niche events — what the summary renders
 
   @@index([platform, day])
+}
+
+/// One creator deal, from first find to monthly payout (src/modules/deals).
+/// Defaults and checks follow docs/partnership-terms.md (PARTNERSHIP_TERMS).
+model Deal {
+  id        String   @id @default(cuid())
+  creatorId String   @unique
+  creator   Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  launchId  String?
+  launch    Launch?  @relation(fields: [launchId], references: [id], onDelete: SetNull)
+
+  stage       String  @default("FOUND") // DealStage: FOUND | PITCHED | REPLIED | AGREED | BUILDING | LAUNCHED | LOST
+  stageSource String  @default("AUTO") // StageSource: AUTO | MANUAL — MANUAL stops auto-sync from overwriting the stage
+  lostReason  String?
+  // set by auto-sync when the data is ahead of the terms (e.g. a build with no signed agreement)
+  termsFlag   String?
+
+  nextAction    String?
+  nextActionDue DateTime?
+
+  agreementStatus String    @default("NONE") // AgreementStatus: NONE | SENT | SIGNED | ENDED
+  agreementUrl    String? // this creator's filled-in copy of the agreement
+  agreementSentAt DateTime?
+  signedAt        DateTime?
+  endsAt          DateTime? // default: launch (or signing) + PARTNERSHIP_TERMS.termMonths
+
+  creatorSharePct Int    @default(50) // 0-100
+  feeBasis        String @default("AFTER_FEES") // FeeBasis: AFTER_FEES | GROSS
+
+  launchWindowStart DateTime?
+  launchWindowEnd   DateTime?
+  promoPostsAgreed  Int?
+  promoPostsDone    Int       @default(0)
+
+  notes        String?
+  stageHistory Json? // [{ stage, at, by: "auto" | "manual", note }]
+
+  ledger SplitEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([stage, nextActionDue])
+}
+
+/// The ledger: one row per deal per month per source. All money in integer cents.
+/// netCents = gross - fees - refunds; creatorCents = round(base x creatorSharePct / 100)
+/// where base is net (AFTER_FEES) or gross - refunds (GROSS); iclipCents = net - creatorCents.
+model SplitEntry {
+  id     String @id @default(cuid())
+  dealId String
+  deal   Deal   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  period       String // YYYY-MM
+  grossCents   Int
+  whopFeeCents Int
+  refundCents  Int
+  netCents     Int
+  creatorCents Int
+  iclipCents   Int
+  sales        Int
+  source       String // SplitSource: WHOP_SYNC | MANUAL
+  notes        String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([dealId, period, source])
 }
