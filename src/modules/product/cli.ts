@@ -1,5 +1,5 @@
 import { runCli, type CliSpec } from '../../lib/cli.js';
-import { buildProduct, type ProductStage } from './index.js';
+import { approveProduct, buildProduct, type ProductStage } from './index.js';
 
 export const spec: CliSpec = {
   name: 'product',
@@ -8,6 +8,7 @@ export const spec: CliSpec = {
     'npm run product -- --handle jamesclearcoffee --angle 1',
     'npm run product -- --handle jamesclearcoffee --pages 42 --stage outline',
     'npm run product -- --handle jamesclearcoffee --resume',
+    'npm run product -- --handle emmarepairs --approve --approved-by "Emma"   # creator approved it (safety products: every procedure)',
   ],
   flags: {
     handle: { type: 'string', description: 'Creator the product is built for.', required: true },
@@ -17,12 +18,19 @@ export const spec: CliSpec = {
     stage: { type: 'string', description: 'research | outline | write | render | all.', default: 'all' },
     resume: { type: 'boolean', description: 'Continue the last unfinished build (stages are cached to disk by default).' },
     refresh: { type: 'boolean', description: 'Force the targeted stage to redo its work instead of reusing cached output.' },
+    approve: { type: 'boolean', description: 'Record that the creator approved the latest RENDERED product (needs --approved-by). Required before publishing a safety-advice product.' },
+    'approved-by': { type: 'string', description: 'With --approve: who approved it.' },
   },
 };
 
 const VALID_STAGES: ProductStage[] = ['research', 'outline', 'write', 'render', 'all'];
 
 await runCli(spec, async (ctx) => {
+  if (ctx.flags.approve) {
+    const r = await approveProduct(String(ctx.flags.handle), String(ctx.flags['approved-by'] ?? ''));
+    ctx.log.info(`"${r.title}" approved (${r.productId})`);
+    return;
+  }
   if (ctx.dryRun) {
     throw new Error(
       'product calls paid APIs at every stage (Serper + Anthropic, Playwright for render) — --dry-run is not supported.',

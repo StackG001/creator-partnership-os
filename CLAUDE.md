@@ -164,6 +164,21 @@ qualified).
   holds the rule (given to the audit and outreach prompts) and the checks:
   ideas that cross the line set `Creator.productFlag`; a message that crosses
   it is held, never auto-sent.
+- **Safety-advice niches** (mains voltage, capacitors, electronics/amp repair,
+  soldering — or any deal Gerald marks with a note containing "Safety-advice
+  niche") are accepted case by case (Gerald, 2026-11-10, @emmarepairs). The
+  product module (`safetyNicheReason` / `SAFETY_PRODUCT_RULE` in
+  `src/lib/productLine.ts`):
+  - requires a "Safety…" callout before the first electrical step in every
+    chapter; the model is re-prompted until it complies;
+  - rejects any step that skips a precaution (no unplugging/discharging, fuse
+    bypass, ground lift, over-rated fuse, "safe to touch");
+  - inserts the "work at your own risk / use a qualified technician"
+    disclaimer in code (after the cover and atop each electrical chapter);
+  - refuses to render while a cached chapter fails, and writes
+    `product/safety-review.md` for the creator.
+  - The publisher refuses until the creator has approved every procedure:
+    `npm run product -- --handle <h> --approve --approved-by "<name>"`.
 
 ## Stack constraints (non-negotiable)
 

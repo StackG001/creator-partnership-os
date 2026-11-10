@@ -2,6 +2,7 @@ import { prisma } from '../../lib/db.js';
 import { getEnv } from '../../lib/env.js';
 import { createLogger } from '../../lib/logger.js';
 import { normalizeHandle } from '../../lib/paths.js';
+import { safetyNicheReason } from '../../lib/productLine.js';
 
 const log = createLogger('publisher');
 
@@ -131,6 +132,16 @@ export async function publishLaunch(
   }
 
   const { creator, product, funnel } = await loadPublishInputs(handleOrUrl, options.productId);
+  // Safety-advice products: the creator must approve every procedure first (src/lib/productLine.ts).
+  const deal = await prisma.deal.findUnique({ where: { creatorId: creator.id }, select: { notes: true } });
+  const safety = safetyNicheReason({ niche: creator.niche, subNiche: creator.subNiche, dealNotes: deal?.notes });
+  if (safety && product.status !== 'APPROVED') {
+    throw new Error(
+      `refused: @${creator.handle} is a safety-advice product (${safety}) and "${product.title}" is ${product.status}, not APPROVED. ` +
+        `The creator must approve every procedure in outputs/${creator.handle}/product/safety-review.md, then run ` +
+        `\`npm run product -- --handle ${creator.handle} --approve --approved-by "…"\`.`,
+    );
+  }
   const payload = buildPayload(env.WHOP_COMPANY_ID, creator.handle, revShareCreatorPct, product, funnel);
 
   if (options.dryRun) {

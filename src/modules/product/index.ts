@@ -14,6 +14,14 @@ import {
   writeJsonArtifact,
 } from '../../lib/paths.js';
 import { webSearch, type SearchResult } from '../../lib/sources/webSearch.js';
+import {
+  ELECTRICAL_STEP,
+  SAFETY_CALLOUT_LABEL,
+  SAFETY_DISCLAIMER,
+  SAFETY_PRODUCT_RULE,
+  safetyNicheReason,
+  skippedPrecautions,
+} from '../../lib/productLine.js';
 import { getEnv } from '../../lib/env.js';
 
 const log = createLogger('product');
@@ -256,12 +264,16 @@ async function runOutline(
   claims: Claim[],
   targetWords: number,
   titleOverride?: string,
+  safety = false,
 ): Promise<Outline> {
   const baseSystem = [
     'You are outlining a research-backed digital product (a 35-50 page guide, rendered as a branded PDF) for Creator Partnership OS.',
     'The product must read as ONE coherent transformation, not a loose pile of tips: map exactly where the reader is stuck now, where they end up, and the bridges between.',
     'Ground every chapter in the audience\'s actual stated pains and situation — do not write a generic sourdough book.',
-  ].join('\n');
+    safety ? SAFETY_PRODUCT_RULE : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   const context = [
     titleOverride ? `Required title: "${titleOverride}"` : `Working title: "${opportunity.title}"`,
@@ -345,6 +357,43 @@ export type ContentBlock = z.infer<typeof BlockSchema>;
 const ChapterSchema = z.object({ title: z.string(), blocks: z.array(BlockSchema).min(4) });
 export type Chapter = z.infer<typeof ChapterSchema>;
 
+function blockText(b: ContentBlock): string {
+  if (b.type === 'paragraph' || b.type === 'heading') return b.text;
+  if (b.type === 'list') return b.items.join(' ');
+  if (b.type === 'callout') return `${b.label} ${b.text}`;
+  return [b.caption ?? '', ...b.headers, ...b.rows.flat()].join(' ');
+}
+
+/** True when a chapter has a block (other than a heading or callout) describing an electrical step. */
+function hasElectricalStep(ch: Chapter): boolean {
+  return ch.blocks.some((b) => b.type !== 'heading' && b.type !== 'callout' && ELECTRICAL_STEP.test(blockText(b)));
+}
+
+/**
+ * The safety rule (src/lib/productLine.ts) for one chapter: a Safety callout
+ * before the first electrical step, and no step that skips a precaution.
+ * Empty = passes.
+ */
+export function chapterSafetyIssues(ch: Pick<Chapter, 'blocks'>): string[] {
+  const issues: string[] = [];
+  const first = ch.blocks.findIndex((b) => b.type !== 'heading' && b.type !== 'callout' && ELECTRICAL_STEP.test(blockText(b)));
+  if (first >= 0) {
+    const warned = ch.blocks.slice(0, first).some((b) => b.type === 'callout' && SAFETY_CALLOUT_LABEL.test(b.label));
+    if (!warned) {
+      const match = blockText(ch.blocks[first]!).match(ELECTRICAL_STEP)?.[0];
+      issues.push(`block ${first + 1} is an electrical step ("${match}") but no callout labelled "Safety…" comes before it`);
+    }
+  }
+  ch.blocks.forEach((b, i) => {
+    for (const label of skippedPrecautions(blockText(b))) issues.push(`block ${i + 1} skips a safety precaution (${label})`);
+  });
+  return issues;
+}
+
+const SafeChapterSchema = ChapterSchema.superRefine((ch, ctx) => {
+  for (const message of chapterSafetyIssues(ch)) ctx.addIssue({ code: 'custom', message });
+});
+
 function wordCount(blocks: ContentBlock[]): number {
   let words = 0;
   for (const b of blocks) {
@@ -362,6 +411,7 @@ async function writeChapter(
   claims: Claim[],
   chapterIndex: number,
   totalChapters: number,
+  safety = false,
 ): Promise<Chapter> {
   const relevantClaims = claims.filter((c) =>
     chapterPlan.sections.some((s) =>
@@ -387,6 +437,7 @@ async function writeChapter(
       ? 'This chapter MUST include at least one `callout` block labeled about make-ahead or freezing.'
       : '',
     `Target length: roughly ${chapterPlan.targetWords} words across all blocks.`,
+    safety ? SAFETY_PRODUCT_RULE : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -406,7 +457,7 @@ async function writeChapter(
   const { data } = await completeJSON({
     system,
     prompt,
-    schema: ChapterSchema,
+    schema: safety ? SafeChapterSchema : ChapterSchema,
     schemaName: 'write_chapter',
     tier: 'heavy',
     label: `product:chapter:${chapterPlan.slug}`,
@@ -463,8 +514,11 @@ function buildHtml(input: {
   evidence: AuditEvidence;
   displayName: string;
   furtherReading: Source[];
+  safety?: boolean;
 }): string {
-  const { outline, chapters, evidence, displayName, furtherReading } = input;
+  const { outline, chapters, evidence, displayName, furtherReading, safety } = input;
+  // Inserted by code, never left to the model: the disclaimer page and a copy at the top of every electrical chapter.
+  const disclaimer = `<div class="callout"><span class="callout-label">Safety — work at your own risk</span>${escapeHtml(SAFETY_DISCLAIMER)}</div>`;
   const colors = evidence.visualStyle.dominantColors;
   const accent = colors[colors.length - 1]?.hex && /^#[0-9a-fA-F]{6}$/.test(colors.at(-1)!.hex) ? colors.at(-1)!.hex : '#8B5A2B';
   const dark = colors.find((c) => /black|dark/i.test(c.name))?.hex ?? '#1a1a1a';
@@ -478,7 +532,7 @@ function buildHtml(input: {
   const chaptersHtml = chapters
     .map(
       (c, i) =>
-        `<section class="chapter" id="chapter-${i + 1}"><h1>${i + 1}. ${escapeHtml(c.title)}</h1>${c.blocks.map(blockToHtml).join('\n')}</section>`,
+        `<section class="chapter" id="chapter-${i + 1}"><h1>${i + 1}. ${escapeHtml(c.title)}</h1>${safety && hasElectricalStep(c) ? disclaimer : ''}${c.blocks.map(blockToHtml).join('\n')}</section>`,
     )
     .join('\n');
 
@@ -528,6 +582,7 @@ function buildHtml(input: {
     <div class="subtitle">${escapeHtml(outline.subtitle)}</div>
     <div class="for">By ${escapeHtml(displayName)}</div>
   </div>
+  ${safety ? `<div class="toc"><h1>Safety first</h1>${disclaimer}</div>` : ''}
   <div class="toc">
     <h1>Contents</h1>
     <ol>${toc}</ol>
@@ -623,8 +678,11 @@ export async function buildProduct(
   const pages = Math.min(PRODUCT_SPEC.maxPages, Math.max(PRODUCT_SPEC.minPages, options.pages ?? 40));
   const targetWords = pages * PRODUCT_SPEC.wordsPerPage;
 
-  const creator = await prisma.creator.findUnique({ where: { handle } });
+  const creator = await prisma.creator.findUnique({ where: { handle }, include: { deal: { select: { notes: true } } } });
   if (!creator) throw new Error(`No creator found for handle "${handle}" — run the audit first.`);
+  const safetyReason = safetyNicheReason({ niche: creator.niche, subNiche: creator.subNiche, dealNotes: creator.deal?.notes });
+  const safety = Boolean(safetyReason);
+  if (safety) log.info(`safety-advice product (${safetyReason}): warnings, disclaimer and creator approval of every procedure are required`);
 
   const evidence = await loadAuditEvidence(creator.id);
   const opportunity = pickOpportunity(evidence, options.angle);
@@ -675,7 +733,7 @@ export async function buildProduct(
     log.info(`outline: using cached outline (${outline.chapters.length} chapters)`);
   } else {
     log.info('outline: building transformation map + chapter plan');
-    outline = await runOutline(opportunity, evidence, claims, targetWords, options.title ?? opportunity.title);
+    outline = await runOutline(opportunity, evidence, claims, targetWords, options.title ?? opportunity.title, safety);
     await fs.writeFile(outlinePath, JSON.stringify(outline, null, 2), 'utf8');
   }
 
@@ -706,7 +764,7 @@ export async function buildProduct(
       log.info(`write: chapter ${i + 1}/${outline.chapters.length} "${plan.title}" — cached`);
     } else {
       log.info(`write: chapter ${i + 1}/${outline.chapters.length} "${plan.title}"`);
-      chapter = await writeChapter(plan, evidence, claims, i, outline.chapters.length);
+      chapter = await writeChapter(plan, evidence, claims, i, outline.chapters.length, safety);
       await fs.writeFile(chapterPath, JSON.stringify(chapter, null, 2), 'utf8');
     }
     chapters.push(chapter);
@@ -729,10 +787,23 @@ export async function buildProduct(
   }
 
   // --- stage 4: render ---
+  if (safety) {
+    // Cached chapters may predate the rule — nothing renders until every chapter passes.
+    const failing = chapters.flatMap((c, i) => chapterSafetyIssues(c).map((issue) => `chapter ${i + 1} "${c.title}": ${issue}`));
+    if (failing.length) {
+      throw new Error(
+        `render refused — safety rule not met:\n  ${failing.join('\n  ')}\nRewrite with \`npm run product -- --handle ${handle} --stage write --refresh\`.`,
+      );
+    }
+  }
   log.info('render: assembling HTML');
   const furtherReading = pickFurtherReading(sources);
-  const html = buildHtml({ outline, chapters, evidence, displayName: creator.displayName ?? handle, furtherReading });
+  const html = buildHtml({ outline, chapters, evidence, displayName: creator.displayName ?? handle, furtherReading, safety });
   const htmlPath = await writeArtifact(handle, 'product', 'product.html', html);
+  if (safety) {
+    const reviewPath = await writeArtifact(handle, 'product', 'safety-review.md', renderSafetyReview(outline.title, chapters, creator.displayName ?? handle));
+    log.warn(`safety review for the creator: ${toRelative(reviewPath)} — publishing is refused until they approve every procedure (npm run product -- --handle ${handle} --approve --approved-by "…")`);
+  }
 
   const pdfPath = path.join(productDir, 'product.pdf');
   log.info('render: attempting PDF via Playwright');
@@ -787,4 +858,53 @@ function pickFurtherReading(sources: Source[], limit = 25): Source[] {
     }
   }
   return [...byHost.values()].slice(0, limit);
+}
+
+// --- safety review + creator approval ------------------------------------------------------------
+
+/** Every procedure in an electrical chapter, as a checklist the creator signs off one by one. */
+function renderSafetyReview(title: string, chapters: Chapter[], creatorName: string): string {
+  const out = [
+    `# Safety review: ${title}`,
+    '',
+    `For ${creatorName} to approve before anything is published. Tick every procedure you have checked, correct anything that is wrong or unsafe, and confirm the warnings and disclaimer.`,
+    '',
+    `Disclaimer printed after the cover and at the top of every electrical chapter:`,
+    `> ${SAFETY_DISCLAIMER}`,
+    '',
+  ];
+  chapters.forEach((c, i) => {
+    if (!hasElectricalStep(c)) return;
+    out.push(`## Chapter ${i + 1}: ${c.title}`, '');
+    for (const b of c.blocks) {
+      if (b.type === 'callout' && SAFETY_CALLOUT_LABEL.test(b.label)) out.push(`- [ ] **Warning (${b.label}):** ${b.text}`);
+      else if (b.type === 'list' && b.ordered) out.push(`- [ ] **Procedure:**`, ...b.items.map((it, n) => `    ${n + 1}. ${it}`));
+      else if (b.type !== 'heading' && ELECTRICAL_STEP.test(blockText(b))) out.push(`- [ ] ${blockText(b)}`);
+    }
+    out.push('');
+  });
+  out.push('Approved by: ____________________   Date: __________');
+  return out.join('\n');
+}
+
+/**
+ * Record that the creator approved the product (for a safety-advice product:
+ * every procedure in safety-review.md). Moves the latest RENDERED product to
+ * APPROVED and adds a dated note to the deal. The publisher refuses a
+ * safety-advice product that is not APPROVED.
+ */
+export async function approveProduct(handleOrUrl: string, approvedBy: string): Promise<{ productId: string; title: string }> {
+  const handle = normalizeHandle(handleOrUrl);
+  if (!approvedBy.trim()) throw new Error('--approved-by is required: who approved it (the creator).');
+  const creator = await prisma.creator.findUnique({ where: { handle }, include: { deal: true } });
+  if (!creator) throw new Error(`No creator found for handle "${handle}".`);
+  const product = await prisma.product.findFirst({ where: { creatorId: creator.id, status: 'RENDERED' }, orderBy: { updatedAt: 'desc' } });
+  if (!product) throw new Error(`@${handle} has no RENDERED product to approve.`);
+  await prisma.product.update({ where: { id: product.id }, data: { status: 'APPROVED' } });
+  if (creator.deal) {
+    const d = new Date();
+    const line = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}: product "${product.title}" approved by ${approvedBy.trim()}${safetyNicheReason({ niche: creator.niche, subNiche: creator.subNiche, dealNotes: creator.deal.notes }) ? ' (every procedure in safety-review.md)' : ''}`;
+    await prisma.deal.update({ where: { id: creator.deal.id }, data: { notes: creator.deal.notes ? `${creator.deal.notes}\n${line}` : line } });
+  }
+  return { productId: product.id, title: product.title };
 }
