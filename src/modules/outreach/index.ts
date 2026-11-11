@@ -317,7 +317,7 @@ function addressInstruction(rawDisplayName: string, handle: string): string {
   ].join(' ');
 }
 
-const SIGN_OFF = `Gerald\n${OUTREACH_SENDER.name} | ${OUTREACH_SENDER.company} | ${OUTREACH_SENDER.email}`;
+const SIGN_OFF = `Gerald\n${OUTREACH_SENDER.name} | ${OUTREACH_SENDER.company} | ${OUTREACH_SENDER.email} | ${OUTREACH_SENDER.website}`;
 
 /**
  * Non-DM messages always end with SIGN_OFF, added here rather than trusted to
@@ -329,7 +329,7 @@ function withSignOff(body: string): string {
   const lines = body.trimEnd().split('\n');
   while (lines.length) {
     const last = lines[lines.length - 1]!.trim();
-    if (last === '' || /^[—–-]?\s*Gerald\b/i.test(last) || /\|\s*iClipmedia\s*\|/i.test(last)) lines.pop();
+    if (last === '' || /^[—–-]?\s*Gerald\b/i.test(last) || /\|\s*iClipmedia\s*\|/i.test(last) || /^(https?:\/\/)?(www\.)?iclipmedia\.com\/?$/i.test(last)) lines.pop();
     else break;
   }
   return `${lines.join('\n').trimEnd()}\n\n${SIGN_OFF}`;

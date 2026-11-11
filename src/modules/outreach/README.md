@@ -39,7 +39,7 @@ Framework messages sign off as:
 
 ```
 Gerald
-Gerald Ebere Ozokwelu | iClipmedia | gerald@iclipmedia.com
+Gerald Ebere Ozokwelu | iClipmedia | gerald@iclipmedia.com | iclipmedia.com
 ```
 
 For every non-DM channel the sign-off is appended in code (`withSignOff`),

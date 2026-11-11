@@ -133,6 +133,8 @@ export const OUTREACH_SENDER = {
   name: 'Gerald Ebere Ozokwelu',
   email: 'gerald@iclipmedia.com',
   company: 'iClipmedia',
+  /** Live since 2026-11-11; on every sign-off. */
+  website: 'iclipmedia.com',
 } as const;
 
 /** How long to wait after a send, with no reply, before the next follow-up is due. */
