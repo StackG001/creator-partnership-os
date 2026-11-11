@@ -239,8 +239,8 @@ function draftsSchemaFor(count: number, quotes: Quote[], sequence: number) {
 //
 //   Seq 1 — state the goal plainly: their audience is already asking for a
 //           product (a sourced comment + the BRIDGE line), we build the whole
-//           thing, they only make content to promote it and keep 50% of every
-//           sale. One yes/no question.
+//           thing, they only make content to promote it and get half of every
+//           sale of the product, after Whop's fees. One yes/no question.
 //   Seq 2 — add something NEW: a second sourced audience quote and/or a
 //           concrete product idea (title + 3-4 things it would cover), plus a
 //           short answer to the most likely objection.
@@ -353,7 +353,8 @@ const SHARED_RULES = [
 ];
 
 const WE_BUILD = 'we build the whole thing — research, writing, design, sales page and setup';
-const THEY_DO = 'they only make content to promote it, and keep 50% of every sale';
+// Whop revenue share (docs/partnership-terms.md): half of every sale of the product, after Whop's fees — no affiliate link.
+const THEY_DO = "they only make content to promote it, and get half of every sale of the product, after Whop's fees, paid automatically by Whop";
 
 function signOffRule(_isDm: boolean): string {
   // Every channel, DMs included, gets SIGN_OFF appended in code (withSignOff).
@@ -397,7 +398,7 @@ function buildFirstTouchSystem({ sensitive, address, isDm, channel, variants }: 
 function buildSecondTouchSystem({ sensitive, address, isDm, channel, variants }: SystemInput): string {
   return [
     ...(sensitive ? [SENSITIVE_PRODUCT_RULE + ' Describe the product that way in this message.'] : []),
-    'You write the second message for Gerald at iClipmedia. The first message (shown below) quoted one audience comment and offered to build them a product for a 50% revenue share. No reply yet.',
+    "You write the second message for Gerald at iClipmedia. The first message (shown below) quoted one audience comment and offered to build them a product for half of every sale of the product, after Whop's fees, paid automatically by Whop. No reply yet.",
     'This message must ADD something new — never repeat the first message\'s quote, hook or wording:',
     '1. NEW EVIDENCE — a SECOND sourced audience quote (a different one from the first message, word for word) and/or a concrete product idea specific to their content: a working title plus the 3-4 things it would cover, drawn from what their audience is asking. Phrase it as what it WOULD cover — nothing has been made.',
     '2. OBJECTION — answer the single most likely objection in one or two sentences, without naming it as an objection. "I don\'t have time" → they don\'t build anything; we do all of it and they just post about it. "My audience won\'t pay" → point to the comments asking for exactly this. Pick whichever fits this creator best.',
@@ -417,7 +418,7 @@ function buildSecondTouchSystem({ sensitive, address, isDm, channel, variants }:
 /** Seq 3: the close. No new evidence, no quotes. */
 function buildCloseSystem({ address, isDm, channel, sequence, variants }: SystemInput): string {
   return [
-    `You write the final message for Gerald at iClipmedia — message number ${sequence}, after ${sequence - 1} unanswered ones offering to build this creator a product from what their audience keeps asking for, for a 50% revenue share.`,
+    `You write the final message for Gerald at iClipmedia — message number ${sequence}, after ${sequence - 1} unanswered ones offering to build this creator a product from what their audience keeps asking for, for half of every sale of the product, after Whop's fees, paid automatically by Whop.`,
     'In this order:',
     '1. COST OF WAITING, honestly — name the product idea in a few plain words (from the earlier messages) so "this" is never vague: their audience keeps asking THEM for it, and if they don\'t answer it someone else may. One sentence, plain, no drama, no invented numbers or competitors.',
     '2. EASIEST ASK — make replying effortless: "Reply \'yes\' and I\'ll send the outline." (future tense — nothing has been made yet).',

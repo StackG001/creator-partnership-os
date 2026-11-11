@@ -262,7 +262,7 @@ export function renderShow(d: DealFull): string[] {
     d.termsFlag ? `- ⚠ Terms: ${d.termsFlag}` : '',
     `- Next action: ${d.nextAction ?? '—'}${d.nextActionDue ? ` (due ${day(d.nextActionDue)})` : ''}`,
     `- Agreement: ${agreementLabel(d)}${d.agreementUrl ? ` · ${d.agreementUrl}` : ''} · ends ${day(d.endsAt)}`,
-    `- Terms: creator ${d.creatorSharePct}% · fee basis ${d.feeBasis}${d.feeBasis === PARTNERSHIP_TERMS.feeBasis && !PARTNERSHIP_TERMS.feeBasisConfirmed ? ' (default, not yet confirmed in Whop)' : ''}`,
+    `- Terms: creator ${d.creatorSharePct}% via Whop revenue share · fee basis ${d.feeBasis}${d.feeBasis === PARTNERSHIP_TERMS.feeBasis ? ' (confirmed default)' : ' (one-off — not the standard terms)'}`,
     `- Launch window: ${d.launchWindowStart ? `${day(d.launchWindowStart)} → ${day(d.launchWindowEnd)}` : '—'} · promo posts ${d.promoPostsDone}/${d.promoPostsAgreed ?? '—'}`,
     `- Product: ${d.product ? `${d.product.title} (${d.product.status})` : '—'} · Launch: ${d.launch ? `${d.launch.status}${d.launch.url ? ` ${d.launch.url}` : ''}` : '—'}`,
     d.notes ? `- Notes:\n${d.notes.split('\n').map((l) => `  - ${l}`).join('\n')}` : '',

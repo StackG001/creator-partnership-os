@@ -3,6 +3,7 @@ import { DEAL_STAGES, PARTNERSHIP_TERMS } from '../../lib/constants.js';
 import { qualifiedLeads, renderLeadsTable } from '../pipeline/index.js';
 import { day, usd } from './index.js';
 import { periodOf, stageRank } from './sync.js';
+import { REV_SHARE_NOT_SET } from '../publisher/index.js';
 
 const DAY_MS = 86_400_000;
 
@@ -27,7 +28,7 @@ export async function renderDealsReport(opts: { leadsTable?: boolean; now?: Date
   const now = opts.now ?? new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const deals = await prisma.deal.findMany({
-    include: { creator: { select: { handle: true, doNotContact: true } }, ledger: true },
+    include: { creator: { select: { handle: true, doNotContact: true } }, ledger: true, launch: { select: { notes: true } } },
     orderBy: { updatedAt: 'desc' },
   });
   const out: string[] = [`# Deals — week of ${day(today)}`, ''];
@@ -63,6 +64,7 @@ export async function renderDealsReport(opts: { leadsTable?: boolean; now?: Date
       const left = (+d.endsAt - +today) / DAY_MS;
       if (left >= 0 && left <= PARTNERSHIP_TERMS.endingWarnDays) action.push(`- ${h}: agreement ends ${day(d.endsAt)} (renews yearly; ${PARTNERSHIP_TERMS.noticeDays} days' notice to end)`);
     }
+    if (d.launch?.notes?.includes(REV_SHARE_NOT_SET)) action.push(`- ${h}: ⚠ live on Whop but the creator's ${d.creatorSharePct}% revenue share is not set in Whop yet — Dashboard → Affiliates → Revenue share`);
     if (d.termsFlag && d.stage !== 'LOST') action.push(`- ${h}: ⚠ terms guard — ${d.termsFlag}`);
   }
   out.push('## Deals needing action', ...(action.length ? action : ['Nothing needs action.']), '');
@@ -92,10 +94,10 @@ export async function renderDealsReport(opts: { leadsTable?: boolean; now?: Date
     }
   }
   const bases = [...new Set(deals.map((d) => d.feeBasis))];
-  const unconfirmed = bases.includes(PARTNERSHIP_TERMS.feeBasis) && !PARTNERSHIP_TERMS.feeBasisConfirmed;
+  const oneOff = deals.filter((d) => d.feeBasis !== PARTNERSHIP_TERMS.feeBasis).map((d) => `@${d.creator.handle} (${d.feeBasis})`);
   out.push(
     '',
-    `Fee basis in use: ${bases.join(', ') || PARTNERSHIP_TERMS.feeBasis}.${unconfirmed ? ` **${PARTNERSHIP_TERMS.feeBasis} is the default and still unconfirmed in Whop** — confirm whether the creator's ${PARTNERSHIP_TERMS.creatorSharePct}% is after Whop's fee or of the gross, then update docs/partnership-terms.md and PARTNERSHIP_TERMS together.` : ''}`,
+    `Fee basis: ${PARTNERSHIP_TERMS.feeBasis} (Whop revenue share is calculated after all Whop fees; confirmed ${PARTNERSHIP_TERMS.feeBasisConfirmedOn}).${oneOff.length ? ` One-off deals on another basis: ${oneOff.join(', ')}.` : ''}`,
   );
   if (rows.some((e) => e.source === 'WHOP_SYNC' && e.whopFeeCents === 0 && e.grossCents > 0)) out.push('Whop fees are not yet known for synced months (recorded as $0).');
 

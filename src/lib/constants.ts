@@ -359,11 +359,14 @@ export const PARTNERSHIP_TERMS = {
     agreementTemplate: 'https://claude.ai/artifact/ULQS4taw2AyofeTUh3FZjp',
     servicesQuote: 'https://claude.ai/artifact/MsweDmqjJaDG7VfcsFXgGJ',
   },
-  /** Creator's share of each sale made through their Whop affiliate link. */
+  /** Creator's share of EVERY sale of their product (however the buyer found it), via Whop revenue share set per product. No affiliate link. */
   creatorSharePct: 50,
-  /** Still to be confirmed in Whop — the report says so while this is the basis in use. */
+  /** Whop calculates revenue share after all Whop fees (docs.whop.com/affiliates/setup-rev-share). Confirmed 2026-11-11. */
   feeBasis: 'AFTER_FEES' as FeeBasis,
-  feeBasisConfirmed: false,
+  feeBasisConfirmedOn: '2026-11-11',
+  /** How the creator is paid, and what they disclose in their posts. */
+  payoutMethod: 'Whop revenue share (Dashboard → Affiliates → Revenue share), product-specific',
+  disclosure: 'the paid partnership',
   /** The creator approves the idea and the final product within this many days of each request. */
   approvalDays: 7,
   /** Agreement length from launch; renews yearly. */

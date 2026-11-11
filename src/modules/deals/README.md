@@ -78,7 +78,8 @@ npm run deals -- --report
   - agreement ending within 30 days
   - terms-guard flags
 - **Money:** this month and all time, per deal and in total. It shows the fee
-  basis in use and a reminder while it is still the unconfirmed default.
+  basis in use: AFTER_FEES, confirmed 2026-11-11, because Whop revenue share is
+  calculated after Whop's fees. It also lists any one-off GROSS deals.
 - **Ends with** the Qualified leads table.
 
 On Mondays the daily summary (`outputs/_pipeline/latest.md`) includes this

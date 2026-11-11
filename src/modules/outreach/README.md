@@ -7,7 +7,8 @@ design"):
 1. **Seq 1 — the goal, plainly.** A sourced audience comment word for word +
    the BRIDGE line (it speaks for the whole audience) → we build the whole
    thing (research, writing, design, sales page, setup) → they only make
-   content to promote it and keep 50% of every sale → one yes/no question.
+   content to promote it and get half of every sale of the product, after
+   Whop's fees, paid automatically by Whop → one yes/no question.
 2. **Seq 2 — something new.** A second sourced quote (only quotes seq 1
    didn't use) and/or a concrete product idea (title + 3-4 things it would
    cover), plus a short answer to the likeliest objection. One yes/no question.

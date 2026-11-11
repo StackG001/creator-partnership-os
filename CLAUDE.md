@@ -86,7 +86,9 @@ in code before anything can send (`sendChecks`, `npm run outreach -- --check <id
   most clearly shows demand) + the BRIDGE line ("bet you get some version of
   that every time you post"). We build the whole thing — research, writing,
   design, sales page, setup — and they only make content to promote it,
-  keeping 50% of every sale. Ends with one yes/no question.
+  getting half of every sale of the product, after Whop's fees, paid
+  automatically by Whop (revenue share, no affiliate link). Ends with one
+  yes/no question.
 - **Seq 2 — add something new, never repeat seq 1.** A second sourced audience
   quote (it only gets quotes seq 1 didn't use) and/or a concrete product idea
   specific to their content (working title + the 3-4 things it would cover),

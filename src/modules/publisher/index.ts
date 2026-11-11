@@ -50,6 +50,46 @@ interface CheckoutConfigPayload {
   metadata: { creatorHandle: string; revShareCreatorPct: number; source: 'creator-partnership-os' };
 }
 
+/**
+ * Creators are paid through Whop REVENUE SHARE: 50% of every sale of their
+ * product, set per product, calculated after all Whop fees
+ * (docs/partnership-terms.md). Not an affiliate link.
+ *
+ * TODO(rev-share): set it through the API once the REST shape is confirmed.
+ * Whop documents it only as SDK calls (https://docs.whop.com/developer/guides/affiliates.md):
+ *   const affiliate = await client.affiliates.create({ company_id, user_identifier });
+ *   await client.affiliates.overrides.create(affiliate.id, { override_type: 'rev_share', product_id, commission_value: 50 });
+ * The raw HTTP path isn't documented, and neither is `revenue_basis` (the dashboard
+ * docs say the split is always after Whop's fees: https://docs.whop.com/affiliates/setup-rev-share).
+ * Until then a live publish does NOT set the share: it records REV_SHARE_NOT_SET on the
+ * Launch, prints the dashboard steps, and the deals report flags it until it is done.
+ */
+export const REV_SHARE_NOT_SET = 'REV SHARE NOT SET IN WHOP';
+
+export interface RevSharePlan {
+  status: 'planned — not sent (API shape unconfirmed, see TODO in publisher/index.ts)';
+  docs: string[];
+  affiliate: { company_id: string; user_identifier: string };
+  override: { override_type: 'rev_share'; product_id: string; commission_value: number };
+  revenueBasis: 'post_fees (Whop always splits after fees)';
+  dashboardSteps: string[];
+}
+
+export function revSharePlan(companyId: string, creatorHandle: string, sharePct: number, productTitle: string, productId?: string): RevSharePlan {
+  return {
+    status: 'planned — not sent (API shape unconfirmed, see TODO in publisher/index.ts)',
+    docs: ['https://docs.whop.com/developer/guides/affiliates.md', 'https://docs.whop.com/affiliates/setup-rev-share'],
+    affiliate: { company_id: companyId, user_identifier: `<@${creatorHandle}'s Whop username or email>` },
+    override: { override_type: 'rev_share', product_id: productId ?? '<prod_… from the create response>', commission_value: sharePct },
+    revenueBasis: 'post_fees (Whop always splits after fees)',
+    dashboardSteps: [
+      'Whop Dashboard → Marketing → Affiliates → "Share your revenue"',
+      `User: @${creatorHandle}'s Whop account · Share %: ${sharePct}`,
+      `Products: override for "${productTitle}" only`,
+    ],
+  };
+}
+
 function centsToDollars(cents: number): number {
   return Math.round(cents) / 100;
 }
@@ -147,6 +187,8 @@ export async function publishLaunch(
   if (options.dryRun) {
     log.info('DRY RUN — no Whop API call made, no database write. Payload that would be sent:');
     console.log(JSON.stringify(payload, null, 2));
+    log.info("Creator's revenue share (planned; not sent by the live run yet either — see TODO):");
+    console.log(JSON.stringify(revSharePlan(env.WHOP_COMPANY_ID, creator.handle, revShareCreatorPct, product.title), null, 2));
     return {
       launchId: '(dry-run — nothing created)',
       url: '',
@@ -192,6 +234,8 @@ export async function publishLaunch(
       revShareCreatorPct,
       status: 'LIVE',
       launchedAt: new Date(),
+      // TODO(rev-share): cleared once the share is set (by API or by hand in the dashboard)
+      notes: `${REV_SHARE_NOT_SET}: set @${creator.handle}'s ${revShareCreatorPct}% revenue share for this product in Whop (Dashboard → Affiliates → Revenue share)`,
       raw: JSON.parse(JSON.stringify(data)),
     },
   });
@@ -199,6 +243,8 @@ export async function publishLaunch(
   await prisma.product.update({ where: { id: product.id }, data: { status: 'PUBLISHED' } });
 
   log.info(`live: ${checkoutUrl}`);
+  log.warn(`${REV_SHARE_NOT_SET} — do this now so @${creator.handle} is paid:`);
+  for (const step of revSharePlan(env.WHOP_COMPANY_ID, creator.handle, revShareCreatorPct, product.title, data.plan.id).dashboardSteps) log.warn(`  ${step}`);
 
   return {
     launchId: launch.id,
