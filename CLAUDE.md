@@ -375,7 +375,7 @@ npm run deals -- --report                        # weekly; also in the Monday da
 - **How:** the database is copied with an online SQLite snapshot (`VACUUM
   INTO`), then integrity-checked before anything reaches Drive. `outputs/` is
   zipped.
-- **Retention:** keeps the last 14 of each, and deletes only its own older
+- **Retention:** keeps the last 28 of each (about 14 days), and deletes only its own older
   files in that folder.
 - **Never backed up:** `.env`.
 - **Automatic:** it runs at the end of every daily pipeline part. A failure is

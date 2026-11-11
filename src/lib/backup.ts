@@ -19,8 +19,8 @@ import { outputsRoot } from './paths.js';
 export const BACKUP = {
   /** Folder under My Drive. */
   driveSubdir: path.join('iClipmedia Backups', 'creator-partnership-os'),
-  /** Backups of each kind kept; older ones are deleted from that folder only. */
-  keep: 14,
+  /** Backups of each kind kept (28 = about 14 days at two daily parts); older ones are deleted from that folder only. */
+  keep: 28,
 } as const;
 
 /** Where ChromeOS mounts My Drive in Linux once it's shared ("Share with Linux"). */
