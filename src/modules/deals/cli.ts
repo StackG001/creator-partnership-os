@@ -51,6 +51,7 @@ export const spec: CliSpec = {
     basis: { type: 'string', description: 'after_fees | gross.' },
     window: { type: 'string', description: 'Launch window YYYY-MM-DD:YYYY-MM-DD.' },
     posts: { type: 'string', description: 'Promo posts agreed for the launch window.' },
+    'whop-user': { type: 'string', description: "With --terms: the creator's Whop username, email or user id (the publisher sets their revenue share on it)." },
     notes: { type: 'string', description: '@handle "text": add a dated note to the deal (--replace overwrites).' },
     replace: { type: 'boolean', description: 'With --notes: replace the existing notes.' },
     promo: { type: 'string', description: '@handle: record promo posts done (with --done +1).' },
@@ -109,7 +110,7 @@ await runCli(spec, async (ctx) => {
     return print(`@${d.creator.handle}: agreement ${d.agreementStatus}${d.endsAt ? ` · ends ${day(d.endsAt)}` : ''}`);
   }
   if (str(f.terms)) {
-    const d = await setTerms(str(f.terms)!, { share: str(f.share), basis: str(f.basis), window: str(f.window), posts: str(f.posts) });
+    const d = await setTerms(str(f.terms)!, { share: str(f.share), basis: str(f.basis), window: str(f.window), posts: str(f.posts), whopUser: str(f['whop-user']) });
     return print(`@${d.creator.handle}: creator ${d.creatorSharePct}% · ${d.feeBasis} · posts ${d.promoPostsDone}/${d.promoPostsAgreed ?? '—'}`);
   }
   if (str(f.notes)) {

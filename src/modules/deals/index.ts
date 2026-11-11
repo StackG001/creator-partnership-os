@@ -141,7 +141,7 @@ export async function setAgreement(handle: string, raw: string, opts: { url?: st
 
 export async function setTerms(
   handle: string,
-  opts: { share?: string; basis?: string; window?: string; posts?: string },
+  opts: { share?: string; basis?: string; window?: string; posts?: string; whopUser?: string },
 ): Promise<DealFull> {
   const deal = await getDeal(handle);
   const data: Prisma.DealUpdateInput = {};
@@ -165,7 +165,11 @@ export async function setTerms(
     if (!Number.isInteger(n) || n < 0) throw new Error(`--posts must be a whole number, got "${opts.posts}".`);
     data.promoPostsAgreed = n;
   }
-  if (!Object.keys(data).length) throw new Error('pass at least one of --share, --basis, --window, --posts.');
+  if (opts.whopUser !== undefined) {
+    if (!opts.whopUser.trim()) throw new Error('--whop-user is empty.');
+    data.whopUser = opts.whopUser.trim().replace(/^@/, '');
+  }
+  if (!Object.keys(data).length) throw new Error('pass at least one of --share, --basis, --window, --posts, --whop-user.');
   await prisma.deal.update({ where: { id: deal.id }, data });
   return getDeal(handle);
 }
@@ -263,6 +267,7 @@ export function renderShow(d: DealFull): string[] {
     `- Next action: ${d.nextAction ?? '—'}${d.nextActionDue ? ` (due ${day(d.nextActionDue)})` : ''}`,
     `- Agreement: ${agreementLabel(d)}${d.agreementUrl ? ` · ${d.agreementUrl}` : ''} · ends ${day(d.endsAt)}`,
     `- Terms: creator ${d.creatorSharePct}% via Whop revenue share · fee basis ${d.feeBasis}${d.feeBasis === PARTNERSHIP_TERMS.feeBasis ? ' (confirmed default)' : ' (one-off — not the standard terms)'}`,
+    `- Whop account (revenue share is set on it): ${d.whopUser ?? '— (set with --terms @handle --whop-user …)'}`,
     `- Launch window: ${d.launchWindowStart ? `${day(d.launchWindowStart)} → ${day(d.launchWindowEnd)}` : '—'} · promo posts ${d.promoPostsDone}/${d.promoPostsAgreed ?? '—'}`,
     `- Product: ${d.product ? `${d.product.title} (${d.product.status})` : '—'} · Launch: ${d.launch ? `${d.launch.status}${d.launch.url ? ` ${d.launch.url}` : ''}` : '—'}`,
     d.notes ? `- Notes:\n${d.notes.split('\n').map((l) => `  - ${l}`).join('\n')}` : '',

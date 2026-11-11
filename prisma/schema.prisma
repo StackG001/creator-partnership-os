@@ -431,6 +431,8 @@ model Deal {
   endsAt          DateTime? // default: launch (or signing) + PARTNERSHIP_TERMS.termMonths
 
   creatorSharePct Int    @default(50) // 0-100
+  // the creator's Whop account (username, email or user id) — the revenue-share override is set on it
+  whopUser        String?
   feeBasis        String @default("AFTER_FEES") // FeeBasis: AFTER_FEES | GROSS
 
   launchWindowStart DateTime?

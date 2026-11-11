@@ -371,6 +371,17 @@ npm run deals -- --ledger @handle --period YYYY-MM --gross 49.00 --fees 3.10 --r
 npm run deals -- --report                        # weekly; also in the Monday daily summary
 ```
 
+**Publisher** (`@whop/sdk`): pays the creator by **Whop revenue share**.
+A live publish runs, in order:
+1. `affiliates.create`
+2. `products.create`
+3. a `rev_share` override on that product (`post_fees`)
+4. `checkoutConfigurations.create`
+
+Nothing goes on sale if the override fails. It needs the creator's Whop
+account: pass `--whop-user` or set it with `deals --terms @h --whop-user`. Run
+it with `--dry-run` first.
+
 **Backup** (`src/lib/backup.ts`, `src/scripts/backup.ts`):
 - **What it backs up:** the database and `outputs/`, to Google Drive at
   `My Drive/iClipmedia Backups/creator-partnership-os/`.

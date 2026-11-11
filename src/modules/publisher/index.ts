@@ -1,3 +1,4 @@
+import { WhopClient } from '@whop/sdk';
 import { prisma } from '../../lib/db.js';
 import { getEnv } from '../../lib/env.js';
 import { createLogger } from '../../lib/logger.js';
@@ -12,6 +13,7 @@ export interface PublishResult {
   checkoutUrl: string;
   externalProductId: string;
   revShareCreatorPct: number;
+  revShare: string;
   dryRun: boolean;
 }
 
@@ -24,69 +26,27 @@ export interface LaunchStats {
 }
 
 /**
- * The request body for Whop's POST /api/v1/checkout_configurations (mode:
- * "payment", inline plan + product) — one call creates the product, its plan
- * and a live checkout link. Whop prices are DOLLARS (decimal), not cents.
- */
-interface CheckoutConfigPayload {
-  mode: 'payment';
-  plan: {
-    company_id: string;
-    currency: 'usd';
-    title: string;
-    description: string;
-    plan_type: 'one_time';
-    initial_price: number;
-    renewal_price: number;
-    visibility: 'visible';
-    product: {
-      external_identifier: string;
-      title: string;
-      description: string;
-      headline: string;
-      visibility: 'visible';
-    };
-  };
-  metadata: { creatorHandle: string; revShareCreatorPct: number; source: 'creator-partnership-os' };
-}
-
-/**
- * Creators are paid through Whop REVENUE SHARE: 50% of every sale of their
- * product, set per product, calculated after all Whop fees
- * (docs/partnership-terms.md). Not an affiliate link.
- *
- * TODO(rev-share): set it through the API once the REST shape is confirmed.
- * Whop documents it only as SDK calls (https://docs.whop.com/developer/guides/affiliates.md):
- *   const affiliate = await client.affiliates.create({ company_id, user_identifier });
- *   await client.affiliates.overrides.create(affiliate.id, { override_type: 'rev_share', product_id, commission_value: 50 });
- * The raw HTTP path isn't documented, and neither is `revenue_basis` (the dashboard
- * docs say the split is always after Whop's fees: https://docs.whop.com/affiliates/setup-rev-share).
- * Until then a live publish does NOT set the share: it records REV_SHARE_NOT_SET on the
- * Launch, prints the dashboard steps, and the deals report flags it until it is done.
+ * Creators are paid through Whop REVENUE SHARE: their share of every sale of
+ * their product, set on that product only, calculated after all Whop fees
+ * (docs/partnership-terms.md). Not an affiliate link. Set with the official SDK
+ * (@whop/sdk, https://docs.whop.com/developer/guides/affiliates.md):
+ *   affiliates.create → affiliates.overrides.create({ override_type: 'rev_share', product_id, revenue_basis: 'post_fees' })
+ * Order matters: the share is set on the product BEFORE its checkout exists, so
+ * nothing goes on sale without the creator's cut in place.
  */
 export const REV_SHARE_NOT_SET = 'REV SHARE NOT SET IN WHOP';
 
-export interface RevSharePlan {
-  status: 'planned — not sent (API shape unconfirmed, see TODO in publisher/index.ts)';
-  docs: string[];
-  affiliate: { company_id: string; user_identifier: string };
-  override: { override_type: 'rev_share'; product_id: string; commission_value: number };
-  revenueBasis: 'post_fees (Whop always splits after fees)';
-  dashboardSteps: string[];
-}
-
-export function revSharePlan(companyId: string, creatorHandle: string, sharePct: number, productTitle: string, productId?: string): RevSharePlan {
-  return {
-    status: 'planned — not sent (API shape unconfirmed, see TODO in publisher/index.ts)',
-    docs: ['https://docs.whop.com/developer/guides/affiliates.md', 'https://docs.whop.com/affiliates/setup-rev-share'],
-    affiliate: { company_id: companyId, user_identifier: `<@${creatorHandle}'s Whop username or email>` },
-    override: { override_type: 'rev_share', product_id: productId ?? '<prod_… from the create response>', commission_value: sharePct },
-    revenueBasis: 'post_fees (Whop always splits after fees)',
-    dashboardSteps: [
-      'Whop Dashboard → Marketing → Affiliates → "Share your revenue"',
-      `User: @${creatorHandle}'s Whop account · Share %: ${sharePct}`,
-      `Products: override for "${productTitle}" only`,
-    ],
+/** Every Whop write the live run makes, in order — printed as-is by --dry-run. */
+export interface PublishPlan {
+  affiliate: { account_id: string; user_identifier: string } | null;
+  product: { account_id: string; title: string; description: string; headline: string; visibility: 'visible'; metadata: Record<string, string> };
+  revShareOverride: { override_type: 'rev_share'; commission_value: number; product_id: string; revenue_basis: 'post_fees' } | null;
+  checkout: {
+    account_id: string;
+    mode: 'payment';
+    currency: 'usd';
+    metadata: Record<string, string | number>;
+    variant: { product_id: string; title: string; description: string; billing_type: 'one_time'; initial_price: number; renewal_price: number; currency: 'usd'; visibility: 'visible' };
   };
 }
 
@@ -96,7 +56,7 @@ function centsToDollars(cents: number): number {
 
 async function loadPublishInputs(handleOrUrl: string, productId?: string) {
   const handle = normalizeHandle(handleOrUrl);
-  const creator = await prisma.creator.findUnique({ where: { handle } });
+  const creator = await prisma.creator.findUnique({ where: { handle }, include: { deal: true } });
   if (!creator) throw new Error(`No creator found for handle "${handle}" — run the audit first.`);
 
   const product = productId
@@ -122,59 +82,90 @@ async function loadPublishInputs(handleOrUrl: string, productId?: string) {
   return { creator, product, funnel };
 }
 
-function buildPayload(
-  companyId: string,
+const PRODUCT_ID = '<prod_… from step 2>';
+
+export function buildPlan(
+  accountId: string,
   creatorHandle: string,
   revShareCreatorPct: number,
+  whopUser: string | null,
   product: { id: string; title: string; promise: string | null; priceCents: number | null },
   funnel: { salesPage?: { headline?: string; subhead?: string } } | null,
-): CheckoutConfigPayload {
+): PublishPlan {
+  const description = product.promise ?? '';
   return {
-    mode: 'payment',
-    plan: {
-      company_id: companyId,
-      currency: 'usd',
+    affiliate: whopUser ? { account_id: accountId, user_identifier: whopUser } : null,
+    product: {
+      account_id: accountId,
       title: product.title,
-      description: product.promise ?? '',
-      plan_type: 'one_time',
-      initial_price: centsToDollars(product.priceCents ?? 0),
-      renewal_price: 0,
+      description,
+      headline: funnel?.salesPage?.headline ?? product.title,
       visibility: 'visible',
-      product: {
-        external_identifier: `cpos-${product.id}`,
+      metadata: { external_identifier: `cpos-${product.id}`, creatorHandle },
+    },
+    revShareOverride: whopUser
+      ? { override_type: 'rev_share', commission_value: revShareCreatorPct, product_id: PRODUCT_ID, revenue_basis: 'post_fees' }
+      : null,
+    checkout: {
+      account_id: accountId,
+      mode: 'payment',
+      currency: 'usd',
+      metadata: { creatorHandle, revShareCreatorPct, source: 'creator-partnership-os' },
+      variant: {
+        product_id: PRODUCT_ID,
         title: product.title,
-        description: product.promise ?? '',
-        headline: funnel?.salesPage?.headline ?? product.title,
+        description,
+        billing_type: 'one_time',
+        initial_price: centsToDollars(product.priceCents ?? 0),
+        renewal_price: 0,
+        currency: 'usd',
         visibility: 'visible',
       },
-    },
-    metadata: {
-      creatorHandle,
-      revShareCreatorPct,
-      source: 'creator-partnership-os',
     },
   };
 }
 
+/** The creator's affiliate record on our Whop account: created, or found if they already have one. */
+async function findOrCreateAffiliate(client: WhopClient, accountId: string, whopUser: string): Promise<{ id: string; username: string | null }> {
+  try {
+    const a = await client.affiliates.create({ account_id: accountId, user_identifier: whopUser });
+    return { id: a.id, username: a.user?.username ?? null };
+  } catch (error) {
+    // Already an affiliate (or the create was refused): look them up before giving up.
+    const wanted = whopUser.replace(/^@/, '').toLowerCase();
+    for await (const a of await client.affiliates.list({ account_id: accountId, query: wanted })) {
+      if (a.user?.username?.toLowerCase() === wanted || a.user?.id === whopUser) return { id: a.id, username: a.user.username };
+    }
+    throw new Error(`could not create or find a Whop affiliate for "${whopUser}": ${(error as Error).message}`);
+  }
+}
+
 /**
- * Creates the Whop product, plan and checkout link, then records a Launch row.
- * dryRun builds and logs the exact payload without calling Whop or writing to
- * the database — nothing external ever happens implicitly.
+ * Publishes on Whop, in this order:
+ *   1. the creator's affiliate record (create or find)
+ *   2. the product
+ *   3. the creator's rev-share override on that product (post_fees)
+ *   4. the checkout (one-time price) — only after 3 succeeded
+ * then records a Launch row. A failure before 4 leaves nothing on sale.
+ * --dry-run prints the plan without calling Whop or writing to the database.
+ * --skip-rev-share publishes without the share (recorded as REV_SHARE_NOT_SET and flagged by deals --report).
  */
 export async function publishLaunch(
   handleOrUrl: string,
   revShareCreatorPct: number,
-  options: { dryRun?: boolean; productId?: string } = {},
+  options: { dryRun?: boolean; productId?: string; whopUser?: string; skipRevShare?: boolean } = {},
 ): Promise<PublishResult> {
   const env = getEnv();
   if (!env.WHOP_API_KEY || !env.WHOP_COMPANY_ID) {
     throw new Error('WHOP_API_KEY and WHOP_COMPANY_ID must be set to publish.');
   }
+  if (!Number.isInteger(revShareCreatorPct) || revShareCreatorPct < 1 || revShareCreatorPct > 100) {
+    throw new Error(`--rev-share must be a whole number 1-100 (Whop's limit), got ${revShareCreatorPct}.`);
+  }
 
   const { creator, product, funnel } = await loadPublishInputs(handleOrUrl, options.productId);
   // Safety-advice products: the creator must approve every procedure first (src/lib/productLine.ts).
-  const deal = await prisma.deal.findUnique({ where: { creatorId: creator.id }, select: { notes: true } });
-  const safety = safetyNicheReason({ niche: creator.niche, subNiche: creator.subNiche, dealNotes: deal?.notes });
+  const safety = safetyNicheReason({ niche: creator.niche, subNiche: creator.subNiche, dealNotes: creator.deal?.notes });
   if (safety && product.status !== 'APPROVED') {
     throw new Error(
       `refused: @${creator.handle} is a safety-advice product (${safety}) and "${product.title}" is ${product.status}, not APPROVED. ` +
@@ -182,50 +173,72 @@ export async function publishLaunch(
         `\`npm run product -- --handle ${creator.handle} --approve --approved-by "…"\`.`,
     );
   }
-  const payload = buildPayload(env.WHOP_COMPANY_ID, creator.handle, revShareCreatorPct, product, funnel);
+
+  const whopUser = options.skipRevShare ? null : (options.whopUser ?? creator.deal?.whopUser ?? null);
+  if (!whopUser && !options.skipRevShare) {
+    throw new Error(
+      `refused: no Whop account for @${creator.handle}, so their ${revShareCreatorPct}% revenue share can't be set. ` +
+        `Pass --whop-user <their Whop username or email> (saved on the deal), or --skip-rev-share to set it by hand in the dashboard.`,
+    );
+  }
+  const plan = buildPlan(env.WHOP_COMPANY_ID, creator.handle, revShareCreatorPct, whopUser, product, funnel);
 
   if (options.dryRun) {
-    log.info('DRY RUN — no Whop API call made, no database write. Payload that would be sent:');
-    console.log(JSON.stringify(payload, null, 2));
-    log.info("Creator's revenue share (planned; not sent by the live run yet either — see TODO):");
-    console.log(JSON.stringify(revSharePlan(env.WHOP_COMPANY_ID, creator.handle, revShareCreatorPct, product.title), null, 2));
-    return {
-      launchId: '(dry-run — nothing created)',
-      url: '',
-      checkoutUrl: '',
-      externalProductId: '',
-      revShareCreatorPct,
-      dryRun: true,
-    };
+    log.info('DRY RUN — no Whop API call made, no database write. The live run would make these calls, in order:');
+    console.log(JSON.stringify({
+      '1 affiliates.create (or find existing)': plan.affiliate ?? 'skipped (--skip-rev-share)',
+      '2 products.create': plan.product,
+      '3 affiliates.overrides.create': plan.revShareOverride ?? 'skipped (--skip-rev-share) — set it by hand: Dashboard → Affiliates → Revenue share',
+      '4 checkoutConfigurations.create': plan.checkout,
+    }, null, 2));
+    return { launchId: '(dry-run — nothing created)', url: '', checkoutUrl: '', externalProductId: '', revShareCreatorPct, revShare: plan.revShareOverride ? 'planned' : 'skipped', dryRun: true };
   }
 
-  log.info(`publishing "${product.title}" to Whop (company ${env.WHOP_COMPANY_ID})`);
-  const res = await fetch('https://api.whop.com/api/v1/checkout_configurations', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.WHOP_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+  const client = new WhopClient({ token: env.WHOP_API_KEY });
+  if (whopUser && options.whopUser && creator.deal && creator.deal.whopUser !== whopUser) {
+    await prisma.deal.update({ where: { id: creator.deal.id }, data: { whopUser } });
+  }
+
+  log.info(`publishing "${product.title}" to Whop (account ${env.WHOP_COMPANY_ID})`);
+  const affiliate = whopUser ? await findOrCreateAffiliate(client, env.WHOP_COMPANY_ID, whopUser) : null;
+
+  const created = await client.products.create(plan.product);
+  log.info(`product ${created.id} created`);
+
+  let revShare: string;
+  if (affiliate && plan.revShareOverride) {
+    try {
+      const override = await client.affiliates.overrides.create({
+        id: affiliate.id,
+        body: { ...plan.revShareOverride, id: affiliate.id, product_id: created.id },
+      });
+      revShare = `rev share set: ${revShareCreatorPct}% post_fees for ${affiliate.username ? `@${affiliate.username}` : whopUser} (affiliate ${affiliate.id}, override ${override.id}) on ${created.id}`;
+      log.info(revShare);
+    } catch (error) {
+      throw new Error(
+        `revenue-share override failed, so NO checkout was created (product ${created.id} exists but is not on sale): ${(error as Error).message}. ` +
+          `Fix it in Whop (Dashboard → Affiliates → Revenue share) or re-run.`,
+      );
+    }
+  } else {
+    revShare = `${REV_SHARE_NOT_SET}: set @${creator.handle}'s ${revShareCreatorPct}% revenue share for product ${created.id} in Whop (Dashboard → Affiliates → Revenue share)`;
+    log.warn(revShare);
+  }
+
+  const checkout = await client.checkoutConfigurations.create({
+    ...plan.checkout,
+    variant: { ...plan.checkout.variant, product_id: created.id },
   });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Whop checkout_configurations create failed: HTTP ${res.status} ${body.slice(0, 500)}`);
-  }
-
-  const data = (await res.json()) as {
-    id: string;
-    purchase_url: string;
-    plan: { id: string };
-  };
-
-  const checkoutUrl = `https://whop.com${data.purchase_url}`;
+  if (!checkout.purchase_url) throw new Error(`Whop returned no purchase_url for checkout ${checkout.id} (product ${created.id}).`);
+  const checkoutUrl = /^https?:\/\//.test(checkout.purchase_url) ? checkout.purchase_url : `https://whop.com${checkout.purchase_url}`;
 
   const launch = await prisma.launch.create({
     data: {
       creatorId: creator.id,
       productId: product.id,
       platform: 'WHOP',
-      externalProductId: data.plan.id,
-      externalPlanId: data.plan.id,
+      externalProductId: created.id,
+      externalPlanId: checkout.variant?.id ?? null,
       url: checkoutUrl,
       checkoutUrl,
       priceCents: product.priceCents,
@@ -234,24 +247,22 @@ export async function publishLaunch(
       revShareCreatorPct,
       status: 'LIVE',
       launchedAt: new Date(),
-      // TODO(rev-share): cleared once the share is set (by API or by hand in the dashboard)
-      notes: `${REV_SHARE_NOT_SET}: set @${creator.handle}'s ${revShareCreatorPct}% revenue share for this product in Whop (Dashboard → Affiliates → Revenue share)`,
-      raw: JSON.parse(JSON.stringify(data)),
+      notes: revShare,
+      raw: JSON.parse(JSON.stringify({ product: created, checkout, affiliate })),
     },
   });
 
   await prisma.product.update({ where: { id: product.id }, data: { status: 'PUBLISHED' } });
 
   log.info(`live: ${checkoutUrl}`);
-  log.warn(`${REV_SHARE_NOT_SET} — do this now so @${creator.handle} is paid:`);
-  for (const step of revSharePlan(env.WHOP_COMPANY_ID, creator.handle, revShareCreatorPct, product.title, data.plan.id).dashboardSteps) log.warn(`  ${step}`);
 
   return {
     launchId: launch.id,
     url: checkoutUrl,
     checkoutUrl,
-    externalProductId: data.plan.id,
+    externalProductId: created.id,
     revShareCreatorPct,
+    revShare,
     dryRun: false,
   };
 }
