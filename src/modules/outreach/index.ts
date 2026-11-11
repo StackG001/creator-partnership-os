@@ -1170,7 +1170,9 @@ export async function listFollowUpsDue(): Promise<FollowUpStatus[]> {
   const creators = await prisma.creator.findMany({
     where: {
       messages: { some: { sentAt: { not: null } } },
-      status: { notIn: ['DECLINED', 'AGREED', 'RETIRED'] },
+      // REPLIED = a live conversation Gerald handles by hand: our replies in it are
+      // logged as sent messages, but they must never trigger an automatic follow-up.
+      status: { notIn: ['REPLIED', 'DECLINED', 'AGREED', 'RETIRED'] },
       doNotContact: false,
     },
     include: {
